@@ -57,6 +57,21 @@ export default function Review({ source, preview = false }: { source: ReviewSour
   const [dlOpen, setDlOpen] = useState(false);
   const [hoverPin, setHoverPin] = useState<number | null>(null);
   const [dragging, setDragging] = useState<null | { kind: 'draft' } | { kind: 'comment'; id: number }>(null);
+  const [editing, setEditing] = useState<{ id: number; draft: string } | null>(null);
+  const [narrow, setNarrow] = useState(false);
+  const coarseRef = useRef(false);
+  const lastTapRef = useRef(0);
+  const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // <900px: rail onder de video, composer als sticky balk (ontwerp 2a)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 900px)');
+    const apply = () => setNarrow(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    coarseRef.current = window.matchMedia('(pointer: coarse)').matches;
+    return () => mq.removeEventListener('change', apply);
+  }, []);
 
   const boxRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -222,6 +237,14 @@ export default function Review({ source, preview = false }: { source: ReviewSour
     top: `${(plane.top + y * plane.height) * 100}%`,
   });
 
+  // Flip de tooltip als hij rechts uit beeld zou lopen — op fractie én op pixels
+  // (op een smal scherm loopt 210px al ruim vóór 55% van de breedte uit beeld).
+  const flipTipX = (x: number) => {
+    if (x > 0.55) return true;
+    const boxW = boxRef.current?.clientWidth ?? 0;
+    return boxW > 0 && (plane.left + x * plane.width) * boxW + 226 > boxW;
+  };
+
   // ---- lokale patch + server-refresh ----
   const patchComment = useCallback((id: number, fn: (c: ApiComment) => ApiComment) => {
     setPayload((p) =>
@@ -229,16 +252,16 @@ export default function Review({ source, preview = false }: { source: ReviewSour
     );
   }, []);
 
-  // ---- pin slepen ----
+  // ---- pin slepen (pointer events: muis én touch) ----
   useEffect(() => {
     if (!dragging) return;
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       movedRef.current = true;
       const f = fracFromEvent(e);
       if (dragging.kind === 'draft') setPin(f);
       else patchComment(dragging.id, (c) => ({ ...c, pin: f }));
     };
-    const onUp = async (e: MouseEvent) => {
+    const onUp = async (e: PointerEvent) => {
       const dragged = dragging;
       setDragging(null);
       if (dragged.kind === 'comment' && movedRef.current) {
@@ -254,22 +277,22 @@ export default function Review({ source, preview = false }: { source: ReviewSour
         }
       }
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
     return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragging, patchComment]);
 
-  const onBoxMouseDown = (e: React.MouseEvent) => {
+  const onBoxPointerDown = (e: React.PointerEvent) => {
     if (!drawMode) return;
     e.preventDefault();
     drawingRef.current = true;
     const f = fracFromEvent(e);
     setLiveStroke([[f.x * 100, f.y * 100]]);
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       const p = fracFromEvent(ev);
       setLiveStroke((s) => (s ? [...s, [p.x * 100, p.y * 100]] : s));
     };
@@ -279,11 +302,16 @@ export default function Review({ source, preview = false }: { source: ReviewSour
         if (s && s.length > 1) setDraftStrokes((d) => [...d, s]);
         return null;
       });
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
+  const placePin = (f: { x: number; y: number }) => {
+    setPlaying(false);
+    setPin(f);
   };
 
   const onBoxClick = (e: React.MouseEvent) => {
@@ -293,8 +321,23 @@ export default function Review({ source, preview = false }: { source: ReviewSour
       return;
     }
     if (drawMode) return;
-    setPlaying(false);
-    setPin(fracFromEvent(e));
+    if (!coarseRef.current) {
+      placePin(fracFromEvent(e));
+      return;
+    }
+    // Touch (2a): tap = pin plaatsen, dubbel-tap = fullscreen
+    const now = performance.now();
+    if (now - lastTapRef.current < 300) {
+      lastTapRef.current = 0;
+      if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      if (document.fullscreenElement) void document.exitFullscreen();
+      else void boxRef.current?.requestFullscreen().catch(() => {});
+      return;
+    }
+    lastTapRef.current = now;
+    const f = fracFromEvent(e);
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = setTimeout(() => placePin(f), 300);
   };
 
   // ---- comments binnen de gekozen versie ----
@@ -382,6 +425,19 @@ export default function Review({ source, preview = false }: { source: ReviewSour
     await load();
   };
 
+  const saveEdit = async () => {
+    if (!editing) return;
+    const { id, draft: body } = editing;
+    setEditing(null);
+    if (!body.trim()) return;
+    patchComment(id, (c) => ({ ...c, body: body.trim() }));
+    try {
+      await api(`/api/comments/${id}`, { method: 'PATCH', body: JSON.stringify({ body }) });
+    } catch {
+      void load();
+    }
+  };
+
   const join = async () => {
     if (gate?.askName && !nameDraft.trim()) return;
     try {
@@ -439,9 +495,29 @@ export default function Review({ source, preview = false }: { source: ReviewSour
           {c.versionNumber < currentVersion && <span className="vBadge">V{c.versionNumber}</span>}
           <span className="cAgo">{timeAgo(c.createdAt)}</span>
         </div>
-        <div className={`cBody ${c.deleted ? 'deleted' : ''}`}>
-          {c.deleted ? 'Comment verwijderd' : c.body}
-        </div>
+        {editing?.id === c.id ? (
+          <div className="editWrap" onClick={(e) => e.stopPropagation()}>
+            <textarea
+              className="editTa"
+              autoFocus
+              rows={2}
+              value={editing.draft}
+              onChange={(e) => setEditing({ id: c.id, draft: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void saveEdit();
+                }
+                if (e.key === 'Escape') setEditing(null);
+              }}
+            />
+            <button className="sendBtn" onClick={() => void saveEdit()}>✓</button>
+          </div>
+        ) : (
+          <div className={`cBody ${c.deleted ? 'deleted' : ''}`}>
+            {c.deleted ? 'Comment verwijderd' : c.body}
+          </div>
+        )}
         {!c.deleted && c.pin && (
           <div className="pinnedCaption">
             <span className="dot">◉</span> PINNED ON FRAME
@@ -457,9 +533,17 @@ export default function Review({ source, preview = false }: { source: ReviewSour
             Jump to frame
           </button>
           {c.mine && !c.deleted && (
-            <button className="cAct" onClick={() => void softDelete(c)}>
-              Delete
-            </button>
+            <>
+              <button
+                className="cAct"
+                onClick={() => setEditing({ id: c.id, draft: c.body })}
+              >
+                Edit
+              </button>
+              <button className="cAct" onClick={() => void softDelete(c)}>
+                Delete
+              </button>
+            </>
           )}
           {!c.deleted && (
             <button
@@ -497,6 +581,60 @@ export default function Review({ source, preview = false }: { source: ReviewSour
       </div>
     );
   };
+
+  // De composer staat op desktop onder de controls; op smal (2a) als sticky
+  // balk onderaan de scrollende kolom, ná de comment-rail.
+  const composerEl = (
+    <div className={`composer ${narrow ? 'composerSticky' : ''}`}>
+      <Avatar name={displayMe} size={30} />
+      <div className={`composerCard ${draft.trim() ? 'hasDraft' : ''}`}>
+        <div className="composerHead">
+          <span className="tcChip">@ {timecode(frame, fps)}</span>
+          <span className="composerAs">
+            Commenting as <b>{displayMe}</b>
+          </span>
+        </div>
+        <textarea
+          ref={taRef}
+          className="composerTa"
+          rows={2}
+          placeholder="Leave feedback at this frame…  (⌘/Ctrl + Enter to post)"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={() => setPlaying(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void post();
+          }}
+        />
+        <div className="composerActions">
+          <button className={`compChip ${pin ? 'active' : ''}`} onClick={() => pin && setPin(null)}>
+            {pin
+              ? '◉ Pin placed — drag to move · click to clear'
+              : narrow
+                ? '◉ Tap the frame to pin'
+                : '◉ Click the frame to pin'}
+          </button>
+          <button
+            className={`compChip ${drawMode ? 'active' : ''}`}
+            onClick={() => {
+              setPlaying(false);
+              setDrawMode(!drawMode);
+            }}
+          >
+            {drawMode ? '✎ Drawing — click to stop' : '✎ Draw'}
+          </button>
+          {draftStrokes.length > 0 && (
+            <button className="compChip" onClick={() => setDraftStrokes((d) => d.slice(0, -1))}>
+              ↺ Undo
+            </button>
+          )}
+          <button className={`postBtn ${draft.trim() ? 'ready' : ''}`} onClick={() => void post()}>
+            Post
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="main" style={{ height: '100vh' }}>
@@ -568,7 +706,7 @@ export default function Review({ source, preview = false }: { source: ReviewSour
 
       <div className="rvBody">
         <div className="videoCol">
-          <div className="videoBox" ref={boxRef} onMouseDown={onBoxMouseDown} onClick={onBoxClick}>
+          <div className="videoBox" ref={boxRef} onPointerDown={onBoxPointerDown} onClick={onBoxClick}>
             {ready && v ? (
               <video
                 key={v.id}
@@ -644,7 +782,7 @@ export default function Review({ source, preview = false }: { source: ReviewSour
                   <div
                     className={`pin ${c.resolved ? 'resolved' : ''} ${isDragging ? 'dragging' : ''}`}
                     style={planePct(p.x, p.y)}
-                    onMouseDown={(e) => {
+                    onPointerDown={(e) => {
                       if (!c.mine && !viewerIsEditor) return; // alleen eigen pins verslepen
                       e.stopPropagation();
                       e.preventDefault();
@@ -669,7 +807,7 @@ export default function Review({ source, preview = false }: { source: ReviewSour
                       style={{
                         ...planePct(p.x, p.y),
                         transform: `${
-                          p.x > 0.55 ? 'translateX(-100%) translateX(-16px)' : 'translateX(16px)'
+                          flipTipX(p.x) ? 'translateX(-100%) translateX(-16px)' : 'translateX(16px)'
                         } ${p.y > 0.6 ? 'translateY(-100%)' : ''}`,
                       }}
                     >
@@ -689,7 +827,7 @@ export default function Review({ source, preview = false }: { source: ReviewSour
               <div
                 className={`pin pending ${dragging?.kind === 'draft' ? 'dragging' : ''}`}
                 style={planePct(pin.x, pin.y)}
-                onMouseDown={(e) => {
+                onPointerDown={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
                   setDragging({ kind: 'draft' });
@@ -752,54 +890,7 @@ export default function Review({ source, preview = false }: { source: ReviewSour
             </div>
           </div>
 
-          <div className="composer">
-            <Avatar name={displayMe} size={30} />
-            <div className={`composerCard ${draft.trim() ? 'hasDraft' : ''}`}>
-              <div className="composerHead">
-                <span className="tcChip">@ {timecode(frame, fps)}</span>
-                <span className="composerAs">
-                  Commenting as <b>{displayMe}</b>
-                </span>
-              </div>
-              <textarea
-                ref={taRef}
-                className="composerTa"
-                rows={2}
-                placeholder="Leave feedback at this frame…  (⌘/Ctrl + Enter to post)"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onFocus={() => setPlaying(false)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void post();
-                }}
-              />
-              <div className="composerActions">
-                <button
-                  className={`compChip ${pin ? 'active' : ''}`}
-                  onClick={() => pin && setPin(null)}
-                >
-                  {pin ? '◉ Pin placed — drag to move · click to clear' : '◉ Click the frame to pin'}
-                </button>
-                <button
-                  className={`compChip ${drawMode ? 'active' : ''}`}
-                  onClick={() => {
-                    setPlaying(false);
-                    setDrawMode(!drawMode);
-                  }}
-                >
-                  {drawMode ? '✎ Drawing — click to stop' : '✎ Draw'}
-                </button>
-                {draftStrokes.length > 0 && (
-                  <button className="compChip" onClick={() => setDraftStrokes((d) => d.slice(0, -1))}>
-                    ↺ Undo
-                  </button>
-                )}
-                <button className={`postBtn ${draft.trim() ? 'ready' : ''}`} onClick={() => void post()}>
-                  Post
-                </button>
-              </div>
-            </div>
-          </div>
+          {!narrow && composerEl}
         </div>
 
         <aside className="commentRail">
@@ -870,6 +961,8 @@ export default function Review({ source, preview = false }: { source: ReviewSour
             )}
           </div>
         </aside>
+
+        {narrow && composerEl}
       </div>
 
       {gate && (

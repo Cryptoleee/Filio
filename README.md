@@ -64,7 +64,10 @@ Productie op de NAS: `docker compose up -d` (zet eerst `.env`, zie
 5. ✅ Transcode-worker (`scripts/worker.mjs`: 1080p H.264, GOP = 1 s, poster,
    ffprobe-metadata) + Immich-picker in het dashboard
 6. ✅ Gebundelde digestmail naar de editor (venster ~10 min, SMTP via env) + SSE
+7. ✅ Mobiel (2a): tap = pin, dubbel-tap = fullscreen, composer als sticky balk;
+   pins en tekenen werken via pointer events ook op touch. Eigen comments zijn
+   inline te bewerken (besloten regel 2).
 
 Nog open richting echte NAS-deploy: Immich-endpointnamen checken tegen
-`/api/api-docs` van je eigen installatie (§5), en mobiel (tap = pin,
-sticky composer, optie 2a) is nog niet gebouwd.
+`/api/api-docs` van je eigen installatie (§5) — de client zit in
+`lib/server/immich.ts`.

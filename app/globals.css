@@ -189,6 +189,9 @@ a { color: inherit; text-decoration: none; }
   padding: 20px 22px;
   flex: none;
 }
+@media (max-width: 700px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+}
 .statCard {
   background: var(--card);
   border: 1px solid var(--border-1);
@@ -653,6 +656,10 @@ a { color: inherit; text-decoration: none; }
   color: var(--text-faint);
 }
 @media (max-width: 1150px) { .kbdHint { display: none; } }
+@media (max-width: 640px) {
+  .rvHeader { gap: 8px; padding: 0 12px; }
+  .rvSub, .backLink, .verLabel { display: none; }
+}
 .dlWrap { position: relative; }
 .dlBtn {
   height: 32px;
@@ -730,7 +737,9 @@ a { color: inherit; text-decoration: none; }
   overflow: hidden;
   flex: none;
   user-select: none;
+  touch-action: none; /* tekenen en pin-drag mogen niet scrollen */
 }
+.videoBox:fullscreen { aspect-ratio: auto; }
 .videoEl {
   position: absolute;
   inset: 0;
@@ -783,6 +792,7 @@ a { color: inherit; text-decoration: none; }
 }
 .pin {
   position: absolute;
+  touch-action: none;
   width: 22px;
   height: 22px;
   border-radius: 99px;
@@ -909,6 +919,16 @@ a { color: inherit; text-decoration: none; }
   padding: 18px;
   border-top: 1px solid var(--border-1);
 }
+/* 2a: op smal is de composer een sticky balk onderaan de scrollende kolom */
+.composerSticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 40;
+  background: var(--panel);
+  padding: 12px 14px;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.45);
+}
+.composerSticky > .avatar { display: none; }
 .composer > .avatar { width: 30px; height: 30px; font-size: 11px; }
 .composerCard {
   flex: 1;
@@ -1107,6 +1127,24 @@ a { color: inherit; text-decoration: none; }
 .replyName { font-size: 11px; font-weight: 500; color: var(--text-name); }
 .replyAgo { margin-left: auto; font-size: 10px; color: var(--text-faint); }
 .replyBody { margin: 6px 0 0 25px; font-size: 12px; line-height: 1.5; color: var(--text-body); }
+.editWrap {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin: 8px 0 0 36px;
+  background: var(--input);
+  border: 1px solid var(--amber);
+  border-radius: 10px;
+  padding: 8px 8px 8px 11px;
+}
+.editTa {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
 .replyRow {
   display: flex;
   gap: 8px;
