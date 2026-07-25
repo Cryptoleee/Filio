@@ -48,14 +48,20 @@ export async function searchVideos(q: string): Promise<ImmichVideo[]> {
     return MOCK_VIDEOS.filter((v) => v.filename.toLowerCase().includes(needle));
   }
   // Endpointnamen verschillen per Immich-versie — check /api/api-docs van je
-  // eigen installatie (Tech Notitie §5). Dit volgt de huidige search-metadata API.
+  // eigen installatie (Tech Notitie §5). Geverifieerd tegen Immich v3.0.x:
+  // duration is daar een getal in ms, bestandsgrootte zit in exifInfo (withExif).
   const res = await fetch(`${process.env.IMMICH_URL}/api/search/metadata`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       'x-api-key': process.env.IMMICH_API_KEY!,
     },
-    body: JSON.stringify({ type: 'VIDEO', originalFileName: q || undefined, size: 50 }),
+    body: JSON.stringify({
+      type: 'VIDEO',
+      originalFileName: q || undefined,
+      size: 50,
+      withExif: true,
+    }),
   });
   if (!res.ok) throw new Error(`Immich search failed: ${res.status}`);
   const data = await res.json();
@@ -63,11 +69,35 @@ export async function searchVideos(q: string): Promise<ImmichVideo[]> {
   return assets.map((a) => ({
     id: a.id,
     filename: a.originalFileName ?? a.id,
-    durationLabel: (a.duration ?? '').slice(3, 8) || '—',
+    durationLabel: durationLabel(a.duration),
     sizeBytes: Number(a.exifInfo?.fileSizeInByte ?? 0),
-    codec: (a.exifInfo?.description || 'VIDEO').toUpperCase(),
-    takenLabel: (a.fileCreatedAt ?? '').slice(0, 10),
+    codec: codecLabel(a),
+    takenLabel: String(a.fileCreatedAt ?? '').slice(0, 10) || '—',
   }));
+}
+
+// Immich levert duration als ms-getal (v3) of als "H:MM:SS.mmm"-string (v1/v2).
+function durationLabel(d: unknown): string {
+  let totalS: number | null = null;
+  if (typeof d === 'number' && Number.isFinite(d)) {
+    totalS = Math.round(d / 1000);
+  } else if (typeof d === 'string' && d.includes(':')) {
+    const parts = d.split(':').map((p) => parseFloat(p));
+    if (parts.every((n) => Number.isFinite(n))) {
+      totalS = Math.round(parts.reduce((acc, n) => acc * 60 + n, 0));
+    }
+  }
+  if (totalS == null) return '—';
+  const mm = String(Math.floor(totalS / 60)).padStart(2, '0');
+  const ss = String(totalS % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
+function codecLabel(a: any): string {
+  const mime = String(a.originalMimeType ?? '');
+  if (mime.includes('/')) return mime.split('/')[1].toUpperCase();
+  const ext = String(a.originalFileName ?? '').split('.').pop();
+  return (ext || 'VIDEO').toUpperCase();
 }
 
 export function mockVideoById(id: string): ImmichVideo | undefined {
