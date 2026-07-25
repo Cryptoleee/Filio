@@ -26,7 +26,10 @@ create table version (
   project_id      bigint not null references project(id),
   number          int not null,
   immich_asset_id text not null,
+  orig_filename   text,
+  orig_bytes      bigint,
   proxy_path      text,
+  proxy_bytes     bigint,
   poster_path     text,
   duration_ms     int,
   fps_numerator   int,           -- bv. 25/1 of 24000/1001
@@ -34,7 +37,8 @@ create table version (
   width           int,
   height          int,
   status          text not null default 'queued'
-                  check (status in ('queued', 'ready', 'failed')),
+                  check (status in ('queued', 'transcoding', 'ready', 'failed')),
+  progress        int not null default 0, -- 0–100, door de worker bijgewerkt
   created_at      timestamptz not null default now(),
   unique (project_id, number)
 );
@@ -43,6 +47,7 @@ create table share_link (
   id            bigint generated always as identity primary key,
   project_id    bigint not null references project(id),
   token         text not null unique, -- 32 bytes random, base58, in het pad /r/<token>
+  ask_name      boolean not null default true,
   password_hash text,
   allow_download boolean not null default true,
   expires_at    timestamptz,

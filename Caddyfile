@@ -1,0 +1,4 @@
+# TLS + reverse proxy. Vervang het domein; Caddy regelt certificaten zelf.
+review.jouwdomein.nl {
+	reverse_proxy web:3000
+}

@@ -2,34 +2,42 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import Avatar from './Avatar';
 import Logo from './Logo';
-import { Comment, FPS, Stroke, TOTAL_FRAMES, timecode } from '@/lib/data';
-import { setState, useAppState } from '@/lib/store';
+import { DEFAULT_FPS, PLACEHOLDER_FRAMES, timecode } from '@/lib/data';
+import { ApiError, api, timeAgo } from '@/lib/api';
+import type { ApiComment, ApiVersion, ReviewPayload, Stroke } from '@/lib/types';
+
+export type ReviewSource =
+  | { kind: 'editor'; projectId: number }
+  | { kind: 'guest'; token: string };
 
 type Sort = 'timecode' | 'newest' | 'oldest';
 
-const STROKE_WINDOW = 40; // frames around a comment where its pin/strokes render
+interface GateInfo {
+  projectTitle: string;
+  askName: boolean;
+  needsPassword: boolean;
+  expiresDays: number | null;
+}
 
-export default function Review({ projectId, guest }: { projectId: string; guest: boolean }) {
-  const app = useAppState();
-  const router = useRouter();
-  const project = app.projects.find((p) => p.id === projectId);
+const STROKE_WINDOW = 40; // frames rond een comment waarin pin/tekening zichtbaar zijn
 
-  // guest identity
-  const [name, setName] = useState('');
+export default function Review({ source, preview = false }: { source: ReviewSource; preview?: boolean }) {
+  const [payload, setPayload] = useState<ReviewPayload | null>(null);
+  const [gate, setGate] = useState<GateInfo | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState('');
+  const [pwDraft, setPwDraft] = useState('');
+  const [joinError, setJoinError] = useState<string | null>(null);
 
   // player
   const [frame, setFrame] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(false);
 
-  // versions
-  const maxVersion = project?.version ?? 1;
-  const [version, setVersion] = useState(maxVersion);
-  useEffect(() => setVersion(maxVersion), [maxVersion]);
+  // versies
+  const [version, setVersion] = useState(0); // 0 = nog niet gekozen → laatste
 
   // composer
   const [draft, setDraft] = useState('');
@@ -45,61 +53,117 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
   const [selected, setSelected] = useState<number | null>(null);
   const [replyDraft, setReplyDraft] = useState('');
 
-  // misc ui
+  // overige ui
   const [dlOpen, setDlOpen] = useState(false);
   const [hoverPin, setHoverPin] = useState<number | null>(null);
   const [dragging, setDragging] = useState<null | { kind: 'draft' } | { kind: 'comment'; id: number }>(null);
 
   const boxRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const movedRef = useRef(false);
   const drawingRef = useRef(false);
 
-  const me = guest ? name || 'Guest' : 'You';
+  const apiBase = source.kind === 'editor' ? `/api/projects/${source.projectId}` : `/api/r/${source.token}`;
 
-  const updateComment = useCallback(
-    (id: number, fn: (c: Comment) => Comment) => {
-      setState((s) => ({
-        ...s,
-        comments: {
-          ...s.comments,
-          [projectId]: (s.comments[projectId] ?? []).map((c) => (c.id === id ? fn(c) : c)),
-        },
-      }));
+  const load = useCallback(async () => {
+    try {
+      const data = await api<ReviewPayload>(apiBase);
+      setPayload(data);
+      setGate(null);
+      setLoadError(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401 && e.data?.needsJoin) {
+        setGate(e.data as GateInfo);
+      } else if (e instanceof ApiError && e.status === 401 && source.kind === 'editor') {
+        location.href = '/login';
+      } else {
+        setLoadError(e instanceof Error ? e.message : String(e));
+      }
+    }
+  }, [apiBase, source.kind]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const versions = payload?.versions ?? [];
+  const latestNumber = versions.length ? versions[versions.length - 1].number : 0;
+  useEffect(() => {
+    if (version === 0 && latestNumber) setVersion(latestNumber);
+  }, [version, latestNumber]);
+
+  const v: ApiVersion | null =
+    versions.find((x) => x.number === (version || latestNumber)) ?? versions[versions.length - 1] ?? null;
+  const fps = v?.fps ?? DEFAULT_FPS;
+  const totalFrames = v?.totalFrames ?? PLACEHOLDER_FRAMES;
+  const ready = v?.status === 'ready';
+
+  // ---- SSE: nieuwe comments live inschuiven ----
+  useEffect(() => {
+    if (!v?.id || gate) return;
+    const es = new EventSource(`/api/versions/${v.id}/events`);
+    es.onmessage = (e) => {
+      if (e.data === 'comment') void load();
+    };
+    return () => es.close();
+  }, [v?.id, gate, load]);
+
+  // ---- seek-helper: frame is leidend, video volgt ----
+  const seek = useCallback(
+    (f: number) => {
+      const clamped = Math.min(totalFrames - 1, Math.max(0, f));
+      setFrame(clamped);
+      const video = videoRef.current;
+      // halve frame erbij zodat we nooit één frame te vroeg landen
+      if (video && ready) video.currentTime = (clamped + 0.5) / fps;
     },
-    [projectId]
+    [totalFrames, fps, ready]
   );
 
-  // ---- playback: rAF loop over integer frames ----
+  // ---- afspelen: echte video indien ready, anders synthetische klok ----
+  useEffect(() => {
+    const video = videoRef.current;
+    if (ready && video) {
+      if (playing) void video.play().catch(() => setPlaying(false));
+      else video.pause();
+    }
+  }, [playing, ready, v?.id]);
+
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
     let last = performance.now();
     let acc = 0;
-    const frameMs = 1000 / FPS;
+    const frameMs = 1000 / fps;
     const tick = (t: number) => {
-      acc += t - last;
-      last = t;
-      const adv = Math.floor(acc / frameMs);
-      if (adv > 0) {
-        acc -= adv * frameMs;
-        setFrame((f) => {
-          let nf = f + adv;
-          if (nf >= TOTAL_FRAMES) {
-            if (loop) return nf % TOTAL_FRAMES;
-            setPlaying(false);
-            return TOTAL_FRAMES - 1;
-          }
-          return nf;
-        });
+      const video = videoRef.current;
+      if (ready && video) {
+        setFrame(Math.min(totalFrames - 1, Math.round(video.currentTime * fps)));
+      } else {
+        acc += t - last;
+        const adv = Math.floor(acc / frameMs);
+        if (adv > 0) {
+          acc -= adv * frameMs;
+          setFrame((f) => {
+            let nf = f + adv;
+            if (nf >= totalFrames) {
+              if (loop) return nf % totalFrames;
+              setPlaying(false);
+              return totalFrames - 1;
+            }
+            return nf;
+          });
+        }
       }
+      last = t;
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing, loop]);
+  }, [playing, loop, fps, totalFrames, ready]);
 
-  // ---- keyboard ----
+  // ---- toetsenbord ----
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
@@ -107,14 +171,15 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
       if (e.key === ' ') {
         e.preventDefault();
         setPlaying((p) => !p);
-      } else if (e.key === 'ArrowLeft') {
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
         setPlaying(false);
-        setFrame((f) => Math.max(0, f - 1));
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        setPlaying(false);
-        setFrame((f) => Math.min(TOTAL_FRAMES - 1, f + 1));
+        setFrame((f) => {
+          const nf = Math.min(totalFrames - 1, Math.max(0, f + (e.key === 'ArrowLeft' ? -1 : 1)));
+          const video = videoRef.current;
+          if (video && ready) video.currentTime = (nf + 0.5) / fps;
+          return nf;
+        });
       } else if (e.key.toLowerCase() === 'c') {
         e.preventDefault();
         setPlaying(false);
@@ -123,35 +188,80 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [totalFrames, fps, ready]);
 
-  // ---- video-box coordinate helpers ----
+  // ---- letterboxing: reken tegen het werkelijke videovlak, niet het element ----
+  const videoAspect = v?.width && v?.height ? v.width / v.height : 16 / 9;
+  const BOX_ASPECT = 16 / 9;
+  const plane =
+    videoAspect >= BOX_ASPECT
+      ? {
+          left: 0,
+          width: 1,
+          top: (1 - BOX_ASPECT / videoAspect) / 2,
+          height: BOX_ASPECT / videoAspect,
+        }
+      : {
+          top: 0,
+          height: 1,
+          left: (1 - videoAspect / BOX_ASPECT) / 2,
+          width: videoAspect / BOX_ASPECT,
+        };
+
   const fracFromEvent = (e: { clientX: number; clientY: number }) => {
     const rect = boxRef.current!.getBoundingClientRect();
-    const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    const y = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
-    return { x, y };
+    const bx = (e.clientX - rect.left) / rect.width;
+    const by = (e.clientY - rect.top) / rect.height;
+    return {
+      x: Math.min(1, Math.max(0, (bx - plane.left) / plane.width)),
+      y: Math.min(1, Math.max(0, (by - plane.top) / plane.height)),
+    };
   };
+  const planePct = (x: number, y: number) => ({
+    left: `${(plane.left + x * plane.width) * 100}%`,
+    top: `${(plane.top + y * plane.height) * 100}%`,
+  });
 
-  // ---- pin dragging + drawing (window listeners while active) ----
+  // ---- lokale patch + server-refresh ----
+  const patchComment = useCallback((id: number, fn: (c: ApiComment) => ApiComment) => {
+    setPayload((p) =>
+      p ? { ...p, comments: p.comments.map((c) => (c.id === id ? fn(c) : c)) } : p
+    );
+  }, []);
+
+  // ---- pin slepen ----
   useEffect(() => {
-    if (!dragging && !drawingRef.current) return;
+    if (!dragging) return;
     const onMove = (e: MouseEvent) => {
-      if (dragging) {
-        movedRef.current = true;
+      movedRef.current = true;
+      const f = fracFromEvent(e);
+      if (dragging.kind === 'draft') setPin(f);
+      else patchComment(dragging.id, (c) => ({ ...c, pin: f }));
+    };
+    const onUp = async (e: MouseEvent) => {
+      const dragged = dragging;
+      setDragging(null);
+      if (dragged.kind === 'comment' && movedRef.current) {
+        // pin-positie is onderdeel van het comment — persist als eigen comment
         const f = fracFromEvent(e);
-        if (dragging.kind === 'draft') setPin(f);
-        else updateComment(dragging.id, (c) => ({ ...c, pin: f }));
+        try {
+          await api(`/api/comments/${dragged.id}/pin`, {
+            method: 'PATCH',
+            body: JSON.stringify({ pin: f }),
+          });
+        } catch {
+          void load();
+        }
       }
     };
-    const onUp = () => setDragging(null);
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [dragging, updateComment]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragging, patchComment]);
 
   const onBoxMouseDown = (e: React.MouseEvent) => {
     if (!drawMode) return;
@@ -178,7 +288,7 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
 
   const onBoxClick = (e: React.MouseEvent) => {
     if (movedRef.current) {
-      // a drag just ended — its click must not place a stray pin
+      // net een drag afgerond — die klik mag geen losse pin plaatsen
       movedRef.current = false;
       return;
     }
@@ -187,109 +297,134 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
     setPin(fracFromEvent(e));
   };
 
-  // ---- comments in scope of the selected version ----
-  const all = app.comments[projectId] ?? [];
+  // ---- comments binnen de gekozen versie ----
+  const comments = payload?.comments ?? [];
+  const currentVersion = version || latestNumber;
   const scoped = useMemo(
     () =>
-      all.filter(
-        (c) => c.version === version || (c.version < version && !c.resolved && !c.deleted)
+      comments.filter(
+        (c) =>
+          c.versionNumber === currentVersion ||
+          (c.versionNumber < currentVersion && !c.resolved && !c.deleted)
       ),
-    [all, version]
+    [comments, currentVersion]
   );
-  const sortFn = (a: Comment, b: Comment) =>
+  const sortFn = (a: ApiComment, b: ApiComment) =>
     sort === 'timecode' ? a.frame - b.frame : sort === 'newest' ? b.id - a.id : a.id - b.id;
   const openList = scoped.filter((c) => !c.resolved).sort(sortFn);
   const resolvedList = scoped.filter((c) => c.resolved).sort(sortFn);
   const unresolvedCount = scoped.filter((c) => !c.resolved && !c.deleted).length;
 
   const byTimecode = [...scoped].sort((a, b) => a.frame - b.frame);
-  const pinNumber = (c: Comment) => byTimecode.indexOf(c) + 1;
+  const pinNumber = (c: ApiComment) => byTimecode.indexOf(c) + 1;
 
   const nearPins = scoped.filter(
     (c) => c.pin && !c.deleted && Math.abs(c.frame - frame) <= STROKE_WINDOW
   );
   const selectedComment = scoped.find((c) => c.id === selected) ?? null;
   const visibleStrokes =
-    selectedComment &&
-    !selectedComment.deleted &&
+    selectedComment && !selectedComment.deleted &&
     Math.abs(selectedComment.frame - frame) <= STROKE_WINDOW
       ? selectedComment.strokes
       : [];
 
-  // ---- actions ----
-  const selectComment = (c: Comment) => {
+  // ---- acties ----
+  const selectComment = (c: ApiComment) => {
     setSelected(c.id);
     setReplyDraft('');
     setPlaying(false);
-    setFrame(c.frame);
+    seek(c.frame);
   };
 
-  const post = () => {
-    if (!draft.trim()) return;
+  const post = async () => {
+    if (!draft.trim() || !v) return;
     setPlaying(false);
-    const id = Math.max(0, ...all.map((c) => c.id)) + 1;
-    const comment: Comment = {
-      id,
-      version,
-      name: me,
-      frame,
-      body: draft.trim(),
-      pin,
-      strokes: draftStrokes,
-      likes: 0,
-      liked: false,
-      resolved: false,
-      deleted: false,
-      mine: true,
-      ago: 'nu',
-      replies: [],
-    };
-    setState((s) => ({
-      ...s,
-      comments: { ...s.comments, [projectId]: [...(s.comments[projectId] ?? []), comment] },
-    }));
+    const res = await api<{ id: number }>(`/api/versions/${v.id}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body: draft.trim(), frame, pin, strokes: draftStrokes }),
+    });
     setDraft('');
     setPin(null);
     setDraftStrokes([]);
     setDrawMode(false);
     setLiveStroke(null);
-    setSelected(id);
+    await load();
+    setSelected(res.id);
   };
 
-  const postReply = (c: Comment) => {
+  const postReply = async (c: ApiComment) => {
     if (!replyDraft.trim()) return;
     const body = replyDraft.trim();
-    updateComment(c.id, (cc) => ({
-      ...cc,
-      replies: [
-        ...cc.replies,
-        { id: cc.replies.length + 1, name: me, ago: 'nu', body, mine: true },
-      ],
-    }));
     setReplyDraft('');
+    await api(`/api/versions/${c.versionId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body, frame: c.frame, parentId: c.id }),
+    });
+    await load();
+  };
+
+  const toggleLike = (c: ApiComment) => {
+    patchComment(c.id, (cc) => ({
+      ...cc,
+      liked: !cc.liked,
+      likes: cc.likes + (cc.liked ? -1 : 1),
+    }));
+    api(`/api/comments/${c.id}/reaction`, { method: 'PUT' }).catch(() => void load());
+  };
+
+  const toggleResolve = (c: ApiComment) => {
+    patchComment(c.id, (cc) => ({ ...cc, resolved: !cc.resolved }));
+    api(`/api/comments/${c.id}/resolve`, { method: 'PATCH' }).catch(() => void load());
+  };
+
+  const softDelete = async (c: ApiComment) => {
+    await api(`/api/comments/${c.id}`, { method: 'DELETE' });
+    await load();
+  };
+
+  const join = async () => {
+    if (gate?.askName && !nameDraft.trim()) return;
+    try {
+      await api(`/api/r/${source.kind === 'guest' ? source.token : ''}/join`, {
+        method: 'POST',
+        body: JSON.stringify({ name: nameDraft.trim(), password: pwDraft || undefined }),
+      });
+      setJoinError(null);
+      await load();
+    } catch (e) {
+      setJoinError(e instanceof Error ? e.message : 'Inloggen mislukt');
+    }
   };
 
   const seekFromTrack = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const f = Math.round(((e.clientX - rect.left) / rect.width) * TOTAL_FRAMES);
-    setFrame(Math.min(TOTAL_FRAMES - 1, Math.max(0, f)));
+    seek(Math.round(((e.clientX - rect.left) / rect.width) * totalFrames));
     setPlaying(false);
   };
 
-  if (!project) {
+  // ---- render ----
+  if (loadError) {
     return (
       <div className="shell" style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ color: 'var(--text-2)', fontSize: 13 }}>
-          Project niet gevonden. <Link href="/" style={{ color: 'var(--amber)' }}>← Terug naar projects</Link>
-        </div>
+        <div style={{ color: 'var(--text-2)', fontSize: 13 }}>{loadError}</div>
       </div>
     );
   }
 
-  const gateOpen = guest && !name;
-  const shot = String(Math.floor(frame / Math.ceil(TOTAL_FRAMES / 8)) + 1).padStart(2, '0');
+  const viewerIsEditor = payload?.viewer.isEditor ?? false;
+  const guestChrome = preview || !viewerIsEditor;
+  const displayMe =
+    viewerIsEditor && !preview ? 'You' : payload?.viewer.name ?? (nameDraft || 'Reviewer');
+  const title = payload?.project.title ?? gate?.projectTitle ?? '…';
+  const sharedSub = payload?.project.sharedAt
+    ? `SHARED ${timeAgo(payload.project.sharedAt).toUpperCase()} AGO`
+    : 'NOT SHARED YET';
+  const allowDownload = payload?.project.allowDownload ?? false;
 
-  const commentRow = (c: Comment) => {
+  const displayName = (c: { name: string; mine: boolean }) =>
+    c.mine && viewerIsEditor ? 'You' : c.name;
+
+  const commentRow = (c: ApiComment) => {
     const isSelected = selected === c.id;
     return (
       <div
@@ -298,11 +433,11 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
         onClick={() => selectComment(c)}
       >
         <div className="cRowHead">
-          <Avatar name={c.name} />
-          <span className="cName">{c.name}</span>
-          <span className="cTc">{timecode(c.frame)}</span>
-          {c.version < version && <span className="vBadge">V{c.version}</span>}
-          <span className="cAgo">{c.ago}</span>
+          <Avatar name={displayName(c)} />
+          <span className="cName">{displayName(c)}</span>
+          <span className="cTc">{timecode(c.frame, fps)}</span>
+          {c.versionNumber < currentVersion && <span className="vBadge">V{c.versionNumber}</span>}
+          <span className="cAgo">{timeAgo(c.createdAt)}</span>
         </div>
         <div className={`cBody ${c.deleted ? 'deleted' : ''}`}>
           {c.deleted ? 'Comment verwijderd' : c.body}
@@ -314,16 +449,7 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
         )}
         <div className="cActions" onClick={(e) => e.stopPropagation()}>
           {!c.deleted && (
-            <button
-              className={`cAct ${c.liked ? 'liked' : ''}`}
-              onClick={() =>
-                updateComment(c.id, (cc) => ({
-                  ...cc,
-                  liked: !cc.liked,
-                  likes: cc.likes + (cc.liked ? -1 : 1),
-                }))
-              }
-            >
+            <button className={`cAct ${c.liked ? 'liked' : ''}`} onClick={() => toggleLike(c)}>
               👍{c.likes > 0 ? ` ${c.likes}` : ''}
             </button>
           )}
@@ -331,19 +457,14 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
             Jump to frame
           </button>
           {c.mine && !c.deleted && (
-            <button
-              className="cAct"
-              onClick={() => updateComment(c.id, (cc) => ({ ...cc, deleted: true }))}
-            >
+            <button className="cAct" onClick={() => void softDelete(c)}>
               Delete
             </button>
           )}
           {!c.deleted && (
             <button
               className={`cAct resolveAct ${c.resolved ? 'resolved' : ''}`}
-              onClick={() =>
-                updateComment(c.id, (cc) => ({ ...cc, resolved: !cc.resolved }))
-              }
+              onClick={() => toggleResolve(c)}
             >
               {c.resolved ? '✓ Resolved' : '○ Resolve'}
             </button>
@@ -352,9 +473,9 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
         {c.replies.map((r) => (
           <div className="replyCard" key={r.id}>
             <div className="replyHead">
-              <Avatar name={r.name} />
-              <span className="replyName">{r.name}</span>
-              <span className="replyAgo">{r.ago}</span>
+              <Avatar name={displayName(r)} />
+              <span className="replyName">{displayName(r)}</span>
+              <span className="replyAgo">{timeAgo(r.createdAt)}</span>
             </div>
             <div className="replyBody">{r.body}</div>
           </div>
@@ -367,10 +488,10 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
               value={replyDraft}
               onChange={(e) => setReplyDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') postReply(c);
+                if (e.key === 'Enter') void postReply(c);
               }}
             />
-            <button className="sendBtn" onClick={() => postReply(c)}>↑</button>
+            <button className="sendBtn" onClick={() => void postReply(c)}>↑</button>
           </div>
         )}
       </div>
@@ -380,91 +501,118 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
   return (
     <div className="main" style={{ height: '100vh' }}>
       <header className="rvHeader">
-        <Link href={guest ? '#' : '/'} onClick={(e) => guest && e.preventDefault()}>
-          <Logo size={26} />
-        </Link>
-        {!guest && (
-          <Link className="backLink" href="/">← Projects</Link>
-        )}
+        {guestChrome ? <Logo size={26} /> : <Link href="/"><Logo size={26} /></Link>}
+        {!guestChrome && <Link className="backLink" href="/">← Projects</Link>}
         <div className="headDivider" />
         <div className="rvTitleWrap">
-          <div className="rvTitle">{project.title}</div>
-          <div className="rvSub">{guest ? 'CLIENT REVIEW · SHARED 2 DAYS AGO' : 'CLIENT REVIEW · PROTOTYPE'}</div>
+          <div className="rvTitle">{title}</div>
+          <div className="rvSub">CLIENT REVIEW · {sharedSub}</div>
         </div>
-        {project.hasCut && (
+        {versions.length > 0 && (
           <div className="verGroup">
             <div className="verPills">
-              {Array.from({ length: maxVersion }, (_, i) => i + 1).map((v) => (
+              {versions.map((ver) => (
                 <button
-                  key={v}
-                  className={`verPill ${v === version ? 'active' : ''}`}
+                  key={ver.id}
+                  className={`verPill ${ver.number === currentVersion ? 'active' : ''}`}
                   onClick={() => {
-                    setVersion(v);
+                    setVersion(ver.number);
                     setSelected(null);
-                    setFrame(0);
                     setPlaying(false);
+                    setFrame(0);
                   }}
                 >
-                  V{v}
+                  V{ver.number}
                 </button>
               ))}
             </div>
-            <span className="verLabel">{version === maxVersion ? 'LATEST' : 'OLDER CUT'}</span>
+            <span className="verLabel">
+              {currentVersion === latestNumber ? 'LATEST' : 'OLDER CUT'}
+            </span>
           </div>
         )}
         <div className="rvRight">
           <span className="kbdHint">SPACE PLAY · ←→ FRAME · C COMMENT</span>
-          <div className="dlWrap">
-            <button className="dlBtn" onClick={() => setDlOpen(!dlOpen)}>↓ Download ▾</button>
-            {dlOpen && (
-              <div className="dlMenu" onMouseLeave={() => setDlOpen(false)}>
-                <button className="dlItem" onClick={() => setDlOpen(false)}>
-                  <div className="dlItemTitle">1080p proxy — 240 MB</div>
-                  <div className="dlItemMeta">H.264 · DIRECT VAN DE NAS</div>
-                </button>
-                <button className="dlItem" onClick={() => setDlOpen(false)}>
-                  <div className="dlItemTitle">Original — 12 GB</div>
-                  <div className="dlItemMeta">PRORES 422 · UIT IMMICH</div>
-                </button>
-              </div>
-            )}
-          </div>
-          <Avatar name={me} size={26} />
+          {allowDownload && (
+            <div className="dlWrap">
+              <button className="dlBtn" onClick={() => setDlOpen(!dlOpen)}>↓ Download ▾</button>
+              {dlOpen && (
+                <div className="dlMenu" onMouseLeave={() => setDlOpen(false)}>
+                  <a
+                    className="dlItem"
+                    href={v && ready ? `${v.streamUrl}?download=1` : undefined}
+                    onClick={() => setDlOpen(false)}
+                  >
+                    <div className="dlItemTitle">
+                      1080p proxy{payload?.project.proxyLabel ? ` — ${payload.project.proxyLabel}` : ''}
+                    </div>
+                    <div className="dlItemMeta">H.264 · DIRECT VAN DE NAS</div>
+                  </a>
+                  <a
+                    className="dlItem"
+                    href={v ? `${v.streamUrl}?original=1` : undefined}
+                    onClick={() => setDlOpen(false)}
+                  >
+                    <div className="dlItemTitle">
+                      Original{payload?.project.originalLabel ? ` — ${payload.project.originalLabel}` : ''}
+                    </div>
+                    <div className="dlItemMeta">UIT IMMICH · ORIGINELE BESTANDSNAAM</div>
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
+          <Avatar name={displayMe} size={26} />
         </div>
       </header>
 
       <div className="rvBody">
         <div className="videoCol">
-          <div
-            className="videoBox"
-            ref={boxRef}
-            onMouseDown={onBoxMouseDown}
-            onClick={onBoxClick}
-          >
-            <div className="videoPh">
-              <span className="phTitle">SHOT {shot}</span>
-              <span className="phSub">PLACEHOLDER — CLICK TO PIN</span>
-            </div>
+          <div className="videoBox" ref={boxRef} onMouseDown={onBoxMouseDown} onClick={onBoxClick}>
+            {ready && v ? (
+              <video
+                key={v.id}
+                ref={videoRef}
+                className="videoEl"
+                src={v.streamUrl}
+                poster={v.posterUrl}
+                preload="auto"
+                playsInline
+                loop={loop}
+                onEnded={() => !loop && setPlaying(false)}
+              />
+            ) : (
+              <div className="videoPh">
+                <span className="phTitle">
+                  {v ? (v.status === 'failed' ? 'FAILED' : `${v.progress}%`) : 'NO CUT'}
+                </span>
+                <span className="phSub">
+                  {v
+                    ? v.status === 'failed'
+                      ? 'TRANSCODE MISLUKT — CHECK DE WORKER-LOGS'
+                      : 'FFMPEG MAAKT DE 1080P PROXY…'
+                    : 'VOEG EEN VERSIE TOE VIA HET DASHBOARD'}
+                </span>
+              </div>
+            )}
 
-            {!playing && <div className="pausedChip">PAUSED · {timecode(frame)}</div>}
+            {!playing && <div className="pausedChip">PAUSED · {timecode(frame, fps)}</div>}
 
-            {/* drawing overlay */}
-            <svg className="svgOverlay" viewBox="0 0 100 100" preserveAspectRatio="none">
-              {visibleStrokes.map((s, i) => (
+            {/* tekenlaag — gepositioneerd op het werkelijke videovlak */}
+            <svg
+              className="svgOverlay"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+              style={{
+                left: `${plane.left * 100}%`,
+                top: `${plane.top * 100}%`,
+                width: `${plane.width * 100}%`,
+                height: `${plane.height * 100}%`,
+              }}
+            >
+              {visibleStrokes.concat(draftStrokes).map((s, i) => (
                 <polyline
-                  key={`c${i}`}
-                  points={s.map((p) => p.join(',')).join(' ')}
-                  fill="none"
-                  stroke="var(--amber)"
-                  strokeWidth={2.2}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  vectorEffect="non-scaling-stroke"
-                />
-              ))}
-              {draftStrokes.map((s, i) => (
-                <polyline
-                  key={`d${i}`}
+                  key={i}
                   points={s.map((p) => p.join(',')).join(' ')}
                   fill="none"
                   stroke="var(--amber)"
@@ -487,7 +635,6 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
               )}
             </svg>
 
-            {/* comment pins */}
             {nearPins.map((c) => {
               const p = c.pin!;
               const isDragging = dragging?.kind === 'comment' && dragging.id === c.id;
@@ -496,8 +643,9 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
                 <div key={c.id}>
                   <div
                     className={`pin ${c.resolved ? 'resolved' : ''} ${isDragging ? 'dragging' : ''}`}
-                    style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
+                    style={planePct(p.x, p.y)}
                     onMouseDown={(e) => {
+                      if (!c.mine && !viewerIsEditor) return; // alleen eigen pins verslepen
                       e.stopPropagation();
                       e.preventDefault();
                       setDragging({ kind: 'comment', id: c.id });
@@ -519,17 +667,16 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
                     <div
                       className="pinTip"
                       style={{
-                        left: `${p.x * 100}%`,
-                        top: `${p.y * 100}%`,
+                        ...planePct(p.x, p.y),
                         transform: `${
                           p.x > 0.55 ? 'translateX(-100%) translateX(-16px)' : 'translateX(16px)'
                         } ${p.y > 0.6 ? 'translateY(-100%)' : ''}`,
                       }}
                     >
                       <div className="pinTipHead">
-                        <Avatar name={c.name} />
-                        <span className="pinTipName">{c.name}</span>
-                        <span className="pinTipTc">{timecode(c.frame)}</span>
+                        <Avatar name={displayName(c)} />
+                        <span className="pinTipName">{displayName(c)}</span>
+                        <span className="pinTipTc">{timecode(c.frame, fps)}</span>
                       </div>
                       <div className="pinTipBody">{c.body}</div>
                     </div>
@@ -538,11 +685,10 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
               );
             })}
 
-            {/* pending (unposted) pin */}
             {pin && (
               <div
                 className={`pin pending ${dragging?.kind === 'draft' ? 'dragging' : ''}`}
-                style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}
+                style={planePct(pin.x, pin.y)}
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
@@ -555,43 +701,37 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
 
           <div className="controls">
             <div className="track" onClick={seekFromTrack}>
-              <div
-                className="trackProgress"
-                style={{ width: `${(frame / TOTAL_FRAMES) * 100}%` }}
-              />
+              <div className="trackProgress" style={{ width: `${(frame / totalFrames) * 100}%` }} />
               {scoped
                 .filter((c) => !c.deleted)
                 .map((c) => (
                   <div
                     key={c.id}
                     className={`marker ${c.resolved ? 'resolved' : ''}`}
-                    style={{ left: `${(c.frame / TOTAL_FRAMES) * 100}%` }}
-                    title={`${timecode(c.frame)} — ${c.name}`}
+                    style={{ left: `${(c.frame / totalFrames) * 100}%` }}
+                    title={`${timecode(c.frame, fps)} — ${displayName(c)}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       selectComment(c);
                     }}
                   />
                 ))}
-              <div
-                className="trackHandle"
-                style={{ left: `${(frame / TOTAL_FRAMES) * 100}%` }}
-              />
+              <div className="trackHandle" style={{ left: `${(frame / totalFrames) * 100}%` }} />
             </div>
             <div className="ctrlRow">
               <button className="playBtn" onClick={() => setPlaying(!playing)}>
                 {playing ? '❚❚' : '▶'}
               </button>
               <span>
-                <span className="tcNow">{timecode(frame)}</span>{' '}
-                <span className="tcTotal">/ {timecode(TOTAL_FRAMES)}</span>
+                <span className="tcNow">{timecode(frame, fps)}</span>{' '}
+                <span className="tcTotal">/ {timecode(totalFrames, fps)}</span>
               </span>
               <div className="ctrlChips">
                 <button
                   className="ctrlChip"
                   onClick={() => {
                     setPlaying(false);
-                    setFrame((f) => Math.max(0, f - 1));
+                    seek(frame - 1);
                   }}
                 >
                   ◀ frame
@@ -600,15 +740,12 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
                   className="ctrlChip"
                   onClick={() => {
                     setPlaying(false);
-                    setFrame((f) => Math.min(TOTAL_FRAMES - 1, f + 1));
+                    seek(frame + 1);
                   }}
                 >
                   frame ▶
                 </button>
-                <button
-                  className={`ctrlChip ${loop ? 'active' : ''}`}
-                  onClick={() => setLoop(!loop)}
-                >
+                <button className={`ctrlChip ${loop ? 'active' : ''}`} onClick={() => setLoop(!loop)}>
                   Loop
                 </button>
               </div>
@@ -616,12 +753,12 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
           </div>
 
           <div className="composer">
-            <Avatar name={me} size={30} />
+            <Avatar name={displayMe} size={30} />
             <div className={`composerCard ${draft.trim() ? 'hasDraft' : ''}`}>
               <div className="composerHead">
-                <span className="tcChip">@ {timecode(frame)}</span>
+                <span className="tcChip">@ {timecode(frame, fps)}</span>
                 <span className="composerAs">
-                  Commenting as <b>{me}</b>
+                  Commenting as <b>{displayMe}</b>
                 </span>
               </div>
               <textarea
@@ -633,13 +770,13 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
                 onChange={(e) => setDraft(e.target.value)}
                 onFocus={() => setPlaying(false)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) post();
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void post();
                 }}
               />
               <div className="composerActions">
                 <button
                   className={`compChip ${pin ? 'active' : ''}`}
-                  onClick={() => setPin(pin ? null : pin)}
+                  onClick={() => pin && setPin(null)}
                 >
                   {pin ? '◉ Pin placed — drag to move · click to clear' : '◉ Click the frame to pin'}
                 </button>
@@ -653,14 +790,11 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
                   {drawMode ? '✎ Drawing — click to stop' : '✎ Draw'}
                 </button>
                 {draftStrokes.length > 0 && (
-                  <button
-                    className="compChip"
-                    onClick={() => setDraftStrokes((d) => d.slice(0, -1))}
-                  >
+                  <button className="compChip" onClick={() => setDraftStrokes((d) => d.slice(0, -1))}>
                     ↺ Undo
                   </button>
                 )}
-                <button className={`postBtn ${draft.trim() ? 'ready' : ''}`} onClick={post}>
+                <button className={`postBtn ${draft.trim() ? 'ready' : ''}`} onClick={() => void post()}>
                   Post
                 </button>
               </div>
@@ -708,8 +842,8 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
                 <div className="emptyCircle">◉</div>
                 <div className="emptyTitle">Nothing here</div>
                 <div className="emptyExplainer">
-                  Pauzeer op een frame en laat daar je feedback achter — met een pin of tekening
-                  als dat helpt.
+                  Pauzeer op een frame en laat daar je feedback achter — met een pin of tekening als
+                  dat helpt.
                 </div>
                 <div className="hintChips">
                   <span className="hintChip">SPACE = PLAY</span>
@@ -727,9 +861,7 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
                     >
                       <span className="checkSq">✓</span>
                       {resolvedList.length} resolved comment{resolvedList.length === 1 ? '' : 's'}
-                      <span className="resolvedBarToggle">
-                        {resolvedCollapsed ? 'Show' : 'Hide'}
-                      </span>
+                      <span className="resolvedBarToggle">{resolvedCollapsed ? 'Show' : 'Hide'}</span>
                     </button>
                     {!resolvedCollapsed && resolvedList.map(commentRow)}
                   </>
@@ -740,32 +872,51 @@ export default function Review({ projectId, guest }: { projectId: string; guest:
         </aside>
       </div>
 
-      {gateOpen && (
+      {gate && (
         <div className="backdrop">
           <div className="gateModal">
             <Logo size={34} />
-            <div className="gateTitle">{project.title}</div>
+            <div className="gateTitle">{gate.projectTitle}</div>
             <div className="gateExplainer">
-              Je bent uitgenodigd om deze cut te bekijken en feedback te geven. Vul je naam in
-              zodat de editor weet wie er reageert.
+              Je bent uitgenodigd om deze cut te bekijken en feedback te geven.
+              {gate.askName ? ' Vul je naam in zodat de editor weet wie er reageert.' : ''}
             </div>
-            <input
-              className="gateInput"
-              autoFocus
-              placeholder="Je naam"
-              value={nameDraft}
-              onChange={(e) => setNameDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && nameDraft.trim()) setName(nameDraft.trim());
-              }}
-            />
-            <button
-              className="gateBtn"
-              onClick={() => nameDraft.trim() && setName(nameDraft.trim())}
-            >
+            {gate.askName && (
+              <input
+                className="gateInput"
+                autoFocus
+                placeholder="Je naam"
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void join();
+                }}
+              />
+            )}
+            {gate.needsPassword && (
+              <input
+                className="gateInput"
+                type="password"
+                placeholder="Wachtwoord"
+                value={pwDraft}
+                onChange={(e) => setPwDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void join();
+                }}
+              />
+            )}
+            {joinError && (
+              <div style={{ color: 'var(--destructive)', fontSize: 12, marginBottom: 10 }}>
+                {joinError}
+              </div>
+            )}
+            <button className="gateBtn" onClick={() => void join()}>
               Open review
             </button>
-            <div className="gateCaption">NO ACCOUNT NEEDED · LINK EXPIRES IN 30 DAYS</div>
+            <div className="gateCaption">
+              NO ACCOUNT NEEDED
+              {gate.expiresDays != null ? ` · LINK EXPIRES IN ${gate.expiresDays} DAYS` : ''}
+            </div>
           </div>
         </div>
       )}

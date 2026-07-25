@@ -1,15 +1,22 @@
 'use client';
 
-// The shared guest link: /r/<token>. In the real app the token is resolved
-// server-side (share_link table); the prototype matches it against seed data.
+// De gedeelde gastlink: /r/<token>. Met ?preview=1 bekijkt de editor de
+// pagina in klant-chrome (geen ← Projects).
 
-import { useParams } from 'next/navigation';
+import { Suspense } from 'react';
+import { useParams, useSearchParams } from 'next/navigation';
 import Review from '@/components/Review';
-import { useAppState } from '@/lib/store';
+
+function GuestRoute() {
+  const { token } = useParams<{ token: string }>();
+  const params = useSearchParams();
+  return <Review source={{ kind: 'guest', token }} preview={params.get('preview') === '1'} />;
+}
 
 export default function Page() {
-  const { token } = useParams<{ token: string }>();
-  const app = useAppState();
-  const project = app.projects.find((p) => p.shareToken === token) ?? app.projects[0];
-  return <Review projectId={project.id} guest />;
+  return (
+    <Suspense>
+      <GuestRoute />
+    </Suspense>
+  );
 }

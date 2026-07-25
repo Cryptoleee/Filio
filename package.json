@@ -5,15 +5,22 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "migrate": "node scripts/migrate.mjs",
+    "seed": "node scripts/seed.mjs",
+    "worker": "node scripts/worker.mjs"
   },
   "dependencies": {
     "next": "15.3.5",
+    "nodemailer": "^9.0.3",
+    "pg": "^8.22.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
     "@types/node": "^22",
+    "@types/nodemailer": "^8.0.1",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "typescript": "^5"

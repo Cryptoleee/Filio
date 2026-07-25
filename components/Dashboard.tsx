@@ -1,114 +1,98 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Avatar from './Avatar';
 import Logo from './Logo';
-import { IMMICH_FILES, ImmichFile, Project } from '@/lib/data';
-import { setState, useAppState } from '@/lib/store';
+import { ApiError, api } from '@/lib/api';
+import type { DashboardPayload, ImmichVideoRow, ProjectSummary, SharePayload } from '@/lib/types';
 
-type PickerMode = { kind: 'version'; project: Project } | { kind: 'project' };
-type Proc = { name: string; pct: number; mode: PickerMode };
+type PickerMode = { kind: 'version'; project: ProjectSummary } | { kind: 'project' };
 
 export default function Dashboard() {
-  const app = useAppState();
   const router = useRouter();
-
+  const [payload, setPayload] = useState<DashboardPayload | null>(null);
   const [query, setQuery] = useState('');
-  const [menuOpen, setMenuOpen] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState<number | null>(null);
+  const [renaming, setRenaming] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [picker, setPicker] = useState<PickerMode | null>(null);
-  const [proc, setProc] = useState<Proc | null>(null);
-  const [shareFor, setShareFor] = useState<Project | null>(null);
+  const [shareFor, setShareFor] = useState<ProjectSummary | null>(null);
 
-  const projects = app.projects.filter(
-    (p) => !p.archived && p.title.toLowerCase().includes(query.toLowerCase())
-  );
+  const load = useCallback(async () => {
+    try {
+      setPayload(await api<DashboardPayload>('/api/projects'));
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) router.replace('/login');
+    }
+  }, [router]);
 
-  const openCount = Object.values(app.comments)
-    .flat()
-    .filter((c) => !c.resolved && !c.deleted).length;
-
-  // Close the card menu on any outside click
   useEffect(() => {
-    if (!menuOpen) return;
+    void load();
+  }, [load]);
+
+  // Poll zolang er een transcode loopt
+  const transcoding = payload?.projects.find(
+    (p) => p.status === 'queued' || p.status === 'transcoding'
+  );
+  useEffect(() => {
+    if (!transcoding) return;
+    const t = setTimeout(() => void load(), 1200);
+    return () => clearTimeout(t);
+  }, [transcoding, payload, load]);
+
+  useEffect(() => {
+    if (menuOpen == null) return;
     const close = () => setMenuOpen(null);
     window.addEventListener('click', close);
     return () => window.removeEventListener('click', close);
   }, [menuOpen]);
 
-  // Simulated ffmpeg progress (real app: transcode worker + polling)
-  useEffect(() => {
-    if (!proc) return;
-    if (proc.pct >= 100) {
-      const t = setTimeout(() => {
-        finishProc(proc);
-        setProc(null);
-      }, 350);
-      return () => clearTimeout(t);
-    }
-    const t = setTimeout(
-      () => setProc((p) => (p ? { ...p, pct: Math.min(100, p.pct + 4 + Math.round(Math.random() * 5)) } : p)),
-      120
-    );
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proc]);
-
-  function finishProc(p: Proc) {
-    if (p.mode.kind === 'version') {
-      const id = p.mode.project.id;
-      setState((s) => ({
-        ...s,
-        projects: s.projects.map((pr) =>
-          pr.id === id ? { ...pr, version: pr.version + 1, agoLabel: 'NOW' } : pr
-        ),
-      }));
-    } else {
-      const title = p.name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ');
-      const id = `p-${Date.now()}`;
-      setState((s) => ({
-        ...s,
-        projects: [
-          ...s.projects,
-          {
-            id,
-            title,
-            version: 1,
-            reviewers: [],
-            agoLabel: 'NOW',
-            duration: '—',
-            hasCut: false,
-            archived: false,
-            shareToken: `${id.slice(-4)}-new`,
-          },
-        ],
-        comments: { ...s.comments, [id]: [] },
-      }));
-    }
-  }
-
-  function pick(file: ImmichFile) {
+  async function pick(file: ImmichVideoRow) {
     if (!picker) return;
-    setProc({ name: file.name, pct: 0, mode: picker });
+    const mode = picker;
     setPicker(null);
-  }
-
-  function commitRename(id: string) {
-    const title = renameDraft.trim();
-    if (title) {
-      setState((s) => ({
-        ...s,
-        projects: s.projects.map((p) => (p.id === id ? { ...p, title } : p)),
-      }));
+    let projectId: number;
+    if (mode.kind === 'version') {
+      projectId = mode.project.id;
+    } else {
+      const title = file.filename.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ');
+      const created = await api<{ id: number }>('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ title }),
+      });
+      projectId = created.id;
     }
-    setRenaming(null);
+    await api(`/api/projects/${projectId}/versions`, {
+      method: 'POST',
+      body: JSON.stringify({ assetId: file.id, filename: file.filename, sizeBytes: file.sizeBytes }),
+    });
+    void load();
   }
 
-  function copyLink(p: Project) {
-    navigator.clipboard?.writeText(`https://review.wolf.nl/r/${p.shareToken}`).catch(() => {});
+  async function commitRename(id: number) {
+    const title = renameDraft.trim();
+    setRenaming(null);
+    if (!title) return;
+    await api(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
+    void load();
   }
+
+  async function archive(id: number) {
+    await api(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify({ archived: true }) });
+    void load();
+  }
+
+  async function copyLink(p: ProjectSummary) {
+    // GET /share maakt de link aan als die er nog niet is
+    const share = await api<SharePayload>(`/api/projects/${p.id}/share`);
+    await navigator.clipboard?.writeText(share.url).catch(() => {});
+    void load();
+  }
+
+  const projects = (payload?.projects ?? []).filter((p) =>
+    p.title.toLowerCase().includes(query.toLowerCase())
+  );
 
   return (
     <div className="shell">
@@ -120,7 +104,7 @@ export default function Dashboard() {
         <div className="railItem" title="Recent">◷</div>
         <div className="railItem" title="Settings">⚙</div>
         <div className="railSpacer" />
-        <Avatar name="Marloes B" size={30} />
+        <Avatar name={payload?.viewer.name ?? '·'} size={30} />
       </nav>
 
       <div className="main">
@@ -135,7 +119,12 @@ export default function Dashboard() {
           <div className="headRight">
             <button
               className="chipBtn"
-              onClick={() => router.push(`/review/${app.projects[0].id}?as=client`)}
+              onClick={async () => {
+                const first = payload?.projects[0];
+                if (!first) return;
+                const share = await api<SharePayload>(`/api/projects/${first.id}/share`);
+                router.push(`${new URL(share.url, location.href).pathname}?preview=1`);
+              }}
             >
               Preview as client
             </button>
@@ -145,14 +134,16 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {proc && (
+        {transcoding && (
           <div className="procBar">
             <div className="procHead">
-              <span className="procName">{proc.name}</span>
-              <span className="procCaption">FFMPEG · 1080P PROXY · {proc.pct}%</span>
+              <span className="procName">
+                {transcoding.transcodingName ?? transcoding.title}
+              </span>
+              <span className="procCaption">FFMPEG · 1080P PROXY · {transcoding.progress}%</span>
             </div>
             <div className="procTrack">
-              <div className="procFill" style={{ width: `${proc.pct}%` }} />
+              <div className="procFill" style={{ width: `${transcoding.progress}%` }} />
             </div>
           </div>
         )}
@@ -160,44 +151,61 @@ export default function Dashboard() {
         <div className="dashScroll">
           <div className="stats">
             <div className="statCard">
-              <div className="statNum">{projects.length + 5}</div>
+              <div className="statNum">{payload?.stats.activeProjects ?? '—'}</div>
               <div className="statLabel">Active projects</div>
             </div>
             <div className="statCard">
-              <div className="statNum">{openCount}</div>
+              <div className="statNum">{payload?.stats.openComments ?? '—'}</div>
               <div className="statLabel">Open comments</div>
             </div>
             <div className="statCard">
-              <div className="statNum">{app.awaitingReply}</div>
+              <div className="statNum">{payload?.stats.awaitingReply ?? '—'}</div>
               <div className="statLabel">Awaiting your reply</div>
             </div>
             <div className="statCard">
-              <div className="statNum">{app.nasGb} GB</div>
+              <div className="statNum">{payload?.stats.nasGb ?? '—'} GB</div>
               <div className="statLabel">On the NAS</div>
             </div>
           </div>
 
           <div className="grid">
             {projects.map((p) => {
-              const comments = app.comments[p.id] ?? [];
-              const unresolved = comments.filter((c) => !c.resolved && !c.deleted).length;
               const meta = [
-                `V${p.version}`,
-                p.reviewers.length ? `${p.reviewers.length} REVIEWERS` : null,
-                p.agoLabel || null,
+                p.latestVersion ? `V${p.latestVersion}` : 'NOG GEEN CUT',
+                p.reviewers.length
+                  ? `${p.reviewers.length} REVIEWER${p.reviewers.length === 1 ? '' : 'S'}`
+                  : p.unresolved === 0 && p.latestVersion
+                    ? 'ALL RESOLVED'
+                    : null,
+                p.updatedLabel,
               ]
                 .filter(Boolean)
                 .join(' · ');
               return (
-                <div
-                  key={p.id}
-                  className="card"
-                  onClick={() => router.push(`/review/${p.id}`)}
-                >
-                  <div className="thumb">
-                    <span className="thumbCaption">THUMBNAIL</span>
-                    {unresolved > 0 && <span className="openBadge">{unresolved} OPEN</span>}
-                    <span className="durChip">{p.duration}</span>
+                <div key={p.id} className="card" onClick={() => router.push(`/review/${p.id}`)}>
+                  <div
+                    className="thumb"
+                    style={
+                      p.posterUrl
+                        ? {
+                            backgroundImage: `url(${p.posterUrl})`,
+                            backgroundSize: 'cover',
+                            backgroundPosition: 'center',
+                          }
+                        : undefined
+                    }
+                  >
+                    {!p.posterUrl && (
+                      <span className="thumbCaption">
+                        {p.status === 'transcoding' || p.status === 'queued'
+                          ? 'TRANSCODING…'
+                          : p.status === 'failed'
+                            ? 'TRANSCODE FAILED'
+                            : 'THUMBNAIL'}
+                      </span>
+                    )}
+                    {p.unresolved > 0 && <span className="openBadge">{p.unresolved} OPEN</span>}
+                    {p.durationLabel && <span className="durChip">{p.durationLabel}</span>}
                   </div>
                   <div className="cardBody">
                     {renaming === p.id ? (
@@ -208,7 +216,7 @@ export default function Dashboard() {
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => setRenameDraft(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') commitRename(p.id);
+                          if (e.key === 'Enter') void commitRename(p.id);
                           if (e.key === 'Escape') setRenaming(null);
                         }}
                         onBlur={() => setRenaming(null)}
@@ -219,16 +227,16 @@ export default function Dashboard() {
                     <div className="cardMeta">{meta}</div>
                     <div className="cardFooter">
                       <div className="avatars">
-                        {p.reviewers.map((r) => (
+                        {p.reviewers.slice(0, 4).map((r) => (
                           <Avatar key={r} name={r} />
                         ))}
                       </div>
-                      {unresolved > 0 && (
-                        <span className="unresolvedLabel">{unresolved} unresolved</span>
+                      {p.unresolved > 0 && (
+                        <span className="unresolvedLabel">{p.unresolved} unresolved</span>
                       )}
                       <button
                         className={`dotsBtn ${menuOpen === p.id ? 'open' : ''}`}
-                        style={{ marginLeft: unresolved > 0 ? 8 : 'auto' }}
+                        style={{ marginLeft: p.unresolved > 0 ? 8 : 'auto' }}
                         onClick={(e) => {
                           e.stopPropagation();
                           setMenuOpen(menuOpen === p.id ? null : p.id);
@@ -272,7 +280,7 @@ export default function Dashboard() {
                       <button
                         className="menuItem"
                         onClick={() => {
-                          copyLink(p);
+                          void copyLink(p);
                           setMenuOpen(null);
                         }}
                       >
@@ -283,12 +291,7 @@ export default function Dashboard() {
                         className="menuItem destructive"
                         onClick={() => {
                           setMenuOpen(null);
-                          setState((s) => ({
-                            ...s,
-                            projects: s.projects.map((pr) =>
-                              pr.id === p.id ? { ...pr, archived: true } : pr
-                            ),
-                          }));
+                          void archive(p.id);
                         }}
                       >
                         <span className="menuIcon">⌫</span> Archive project
@@ -307,71 +310,102 @@ export default function Dashboard() {
           </div>
 
           <div className="footnote">
-            Prototype: alleen het eerste project heeft een cut geladen.
+            Zonder IMMICH_URL draait de picker in mock-modus en genereert de worker testclips.
           </div>
         </div>
       </div>
 
-      {picker && (
-        <div className="backdrop" onClick={() => setPicker(null)}>
-          <div className="modal picker" onClick={(e) => e.stopPropagation()}>
-            <div className="modalHead">
-              <div>
-                <div className="modalTitle">
-                  {picker.kind === 'version' ? 'Add version from Immich' : 'New project from Immich'}
-                </div>
-                <div className="modalSub">
-                  {picker.kind === 'version'
-                    ? `${picker.project.title} · wordt v${picker.project.version + 1}`
-                    : 'Kies een video — dit wordt v1 van een nieuw project'}
-                </div>
-              </div>
-              <button className="modalClose" onClick={() => setPicker(null)}>✕</button>
-            </div>
-            <div className="pickerRows">
-              {IMMICH_FILES.map((f) => (
-                <div className="pickerRow" key={f.id}>
-                  <div className="pickerThumb" />
-                  <div className="pickerText">
-                    <div className="pickerName">{f.name}</div>
-                    <div className="pickerMeta">{f.meta}</div>
-                  </div>
-                  <button className="useBtn" onClick={() => pick(f)}>Use</button>
-                </div>
-              ))}
-            </div>
-            <div className="pickerFoot">SERVER-TO-SERVER · IMMICH API KEY BLIJFT OP DE NAS</div>
-          </div>
-        </div>
-      )}
-
+      {picker && <ImmichPicker mode={picker} onPick={pick} onClose={() => setPicker(null)} />}
       {shareFor && <ShareModal project={shareFor} onClose={() => setShareFor(null)} />}
     </div>
   );
 }
 
-const EXPIRY_STEPS = ['7 days', '30 days', '90 days', 'Never'] as const;
+function ImmichPicker({
+  mode,
+  onPick,
+  onClose,
+}: {
+  mode: PickerMode;
+  onPick: (f: ImmichVideoRow) => void;
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<ImmichVideoRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-function ShareModal({ project, onClose }: { project: Project; onClose: () => void }) {
-  const [askName, setAskName] = useState(true);
-  const [pw, setPw] = useState(false);
-  const [dl, setDl] = useState(true);
-  const [expiry, setExpiry] = useState(1); // 30 days
+  useEffect(() => {
+    api<{ videos: ImmichVideoRow[] }>('/api/immich/videos')
+      .then((d) => setRows(d.videos))
+      .catch((e) => setError(String(e.message)));
+  }, []);
+
+  return (
+    <div className="backdrop" onClick={onClose}>
+      <div className="modal picker" onClick={(e) => e.stopPropagation()}>
+        <div className="modalHead">
+          <div>
+            <div className="modalTitle">
+              {mode.kind === 'version' ? 'Add version from Immich' : 'New project from Immich'}
+            </div>
+            <div className="modalSub">
+              {mode.kind === 'version'
+                ? `${mode.project.title} · wordt v${mode.project.latestVersion + 1}`
+                : 'Kies een video — dit wordt v1 van een nieuw project'}
+            </div>
+          </div>
+          <button className="modalClose" onClick={onClose}>✕</button>
+        </div>
+        <div className="pickerRows">
+          {error && <div style={{ color: 'var(--destructive)', fontSize: 12 }}>{error}</div>}
+          {rows === null && !error && (
+            <div style={{ color: 'var(--text-meta)', fontSize: 12 }}>Immich doorzoeken…</div>
+          )}
+          {rows?.map((f) => (
+            <div className="pickerRow" key={f.id}>
+              <div className="pickerThumb" />
+              <div className="pickerText">
+                <div className="pickerName">{f.filename}</div>
+                <div className="pickerMeta">{f.meta.toUpperCase()}</div>
+              </div>
+              <button className="useBtn" onClick={() => onPick(f)}>Use</button>
+            </div>
+          ))}
+        </div>
+        <div className="pickerFoot">SERVER-TO-SERVER · IMMICH API KEY BLIJFT OP DE NAS</div>
+      </div>
+    </div>
+  );
+}
+
+const EXPIRY_STEPS: (number | null)[] = [7, 30, 90, null];
+
+function ShareModal({ project, onClose }: { project: ProjectSummary; onClose: () => void }) {
+  const [share, setShare] = useState<SharePayload | null>(null);
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const link = `review.wolf.nl/r/${project.shareToken}`;
+  useEffect(() => {
+    api<SharePayload>(`/api/projects/${project.id}/share`).then(setShare).catch(() => {});
+  }, [project.id]);
+
+  async function update(patch: Record<string, unknown>) {
+    setShare(
+      await api<SharePayload>(`/api/projects/${project.id}/share`, {
+        method: 'POST',
+        body: JSON.stringify(patch),
+      })
+    );
+  }
 
   function copy() {
-    navigator.clipboard?.writeText(`https://${link}`).catch(() => {});
+    if (!share) return;
+    navigator.clipboard?.writeText(share.url).catch(() => {});
     setCopied(true);
     if (copyTimer.current) clearTimeout(copyTimer.current);
     copyTimer.current = setTimeout(() => setCopied(false), 1600);
   }
 
-  const expiryLabel = EXPIRY_STEPS[expiry];
-  const expirySub =
-    expiryLabel === 'Never' ? 'Verloopt nooit' : `${expiryLabel.replace(' days', ' dagen')} na delen`;
+  const expiryLabel = share?.expiresDays == null ? 'Never' : `${share.expiresDays} days`;
 
   return (
     <div className="backdrop" onClick={onClose}>
@@ -379,13 +413,15 @@ function ShareModal({ project, onClose }: { project: Project; onClose: () => voi
         <div className="modalHead">
           <div>
             <div className="modalTitle">Share for review</div>
-            <div className="modalSub">{project.title} · v{project.version}</div>
+            <div className="modalSub">
+              {project.title}{project.latestVersion ? ` · v${project.latestVersion}` : ''}
+            </div>
           </div>
           <button className="modalClose" onClick={onClose}>✕</button>
         </div>
 
         <div className="linkRow">
-          <div className="linkField">{link}</div>
+          <div className="linkField">{share ? share.url.replace(/^https?:\/\//, '') : '…'}</div>
           <button className="copyBtn" onClick={copy}>{copied ? 'Copied' : 'Copy'}</button>
         </div>
 
@@ -394,16 +430,29 @@ function ShareModal({ project, onClose }: { project: Project; onClose: () => voi
             <div className="toggleTitle">Ask for a name</div>
             <div className="toggleSub">No account, just who&apos;s talking</div>
           </div>
-          <button className={`switch ${askName ? 'on' : ''}`} onClick={() => setAskName(!askName)}>
+          <button
+            className={`switch ${share?.askName ? 'on' : ''}`}
+            onClick={() => share && update({ askName: !share.askName })}
+          >
             <span className="knob" />
           </button>
         </div>
         <div className="toggleRow">
           <div className="toggleText">
             <div className="toggleTitle">Password</div>
-            <div className="toggleSub">{pw ? 'On' : 'Off'}</div>
+            <div className="toggleSub">{share?.hasPassword ? 'On' : 'Off'}</div>
           </div>
-          <button className={`switch ${pw ? 'on' : ''}`} onClick={() => setPw(!pw)}>
+          <button
+            className={`switch ${share?.hasPassword ? 'on' : ''}`}
+            onClick={() => {
+              if (!share) return;
+              if (share.hasPassword) void update({ password: null });
+              else {
+                const pw = prompt('Wachtwoord voor deze link:');
+                if (pw) void update({ password: pw });
+              }
+            }}
+          >
             <span className="knob" />
           </button>
         </div>
@@ -412,27 +461,37 @@ function ShareModal({ project, onClose }: { project: Project; onClose: () => voi
             <div className="toggleTitle">Allow download</div>
             <div className="toggleSub">Reviewer picks proxy or original</div>
           </div>
-          <button className={`switch ${dl ? 'on' : ''}`} onClick={() => setDl(!dl)}>
+          <button
+            className={`switch ${share?.allowDownload ? 'on' : ''}`}
+            onClick={() => share && update({ allowDownload: !share.allowDownload })}
+          >
             <span className="knob" />
           </button>
         </div>
         <div className="toggleRow" style={{ borderBottom: 'none' }}>
           <div className="toggleText">
             <div className="toggleTitle">Link expires</div>
-            <div className="toggleSub">{expirySub}</div>
+            <div className="toggleSub">
+              {share?.expiresDays == null ? 'Verloopt nooit' : `${share.expiresDays} dagen na delen`}
+            </div>
           </div>
           <button
             className="expiryChip"
-            onClick={() => setExpiry((expiry + 1) % EXPIRY_STEPS.length)}
+            onClick={() => {
+              if (!share) return;
+              const i = EXPIRY_STEPS.indexOf(share.expiresDays == null ? null : share.expiresDays);
+              const nearest = i >= 0 ? i : EXPIRY_STEPS.findIndex((s) => s != null && s >= (share.expiresDays ?? 0));
+              void update({ expiresDays: EXPIRY_STEPS[(Math.max(0, nearest) + 1) % EXPIRY_STEPS.length] });
+            }}
           >
             {expiryLabel} ▾
           </button>
         </div>
 
-        {dl && (
+        {share?.allowDownload && (
           <div className="dlChips">
-            <span className="dlChip">1080p proxy · 240 MB</span>
-            <span className="dlChip">Original · ProRes 12 GB</span>
+            <span className="dlChip">1080p proxy{share.proxyLabel ? ` · ${share.proxyLabel}` : ''}</span>
+            <span className="dlChip">Original{share.originalLabel ? ` · ${share.originalLabel}` : ''}</span>
           </div>
         )}
 

@@ -1,0 +1,60 @@
+# Alles in Docker op de UGREEN NAS, achter één reverse proxy met TLS (§9).
+# Backup: alleen postgres hoeft een dump — proxies zijn wegwerpbaar,
+# originelen zitten al in Immich.
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+
+  web:
+    build: .
+    restart: unless-stopped
+    command: sh -c "node scripts/migrate.mjs && node scripts/seed.mjs && npm run start"
+    environment: &appenv
+      DATABASE_URL: postgresql://filio:${DB_PASSWORD:-filio}@db:5432/filio
+      APP_URL: ${APP_URL:-https://review.jouwdomein.nl}
+      SESSION_SECRET: ${SESSION_SECRET:?zet SESSION_SECRET in .env}
+      PROXY_DIR: /proxies
+      IMMICH_URL: ${IMMICH_URL:-}
+      IMMICH_API_KEY: ${IMMICH_API_KEY:-}
+      EDITOR_EMAIL: ${EDITOR_EMAIL:-editor@example.com}
+      EDITOR_PASSWORD: ${EDITOR_PASSWORD:?zet EDITOR_PASSWORD in .env}
+      EDITOR_NAME: ${EDITOR_NAME:-Editor}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    volumes:
+      - /volume/docker/review/proxies:/proxies
+    depends_on:
+      - db
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: npm run worker
+    environment: *appenv
+    volumes:
+      - /volume/docker/review/proxies:/proxies
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: filio
+      POSTGRES_USER: filio
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-filio}
+    volumes:
+      - /volume/docker/review/db:/var/lib/postgresql/data
+
+volumes:
+  caddy-data:

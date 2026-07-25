@@ -4,28 +4,40 @@ Een zelf-gehost alternatief voor Vimeo Review / Frame.io: één editor, klanten
 reviewen via een gedeelde link zonder account. Feedback is frame-accuraat, met
 optionele pin of tekening op de frame. Cuts staan in Immich op een UGREEN NAS.
 
-## Stand van zaken
+## Architectuur
 
-Dit is de **front-end van dashboard en reviewpagina**, gebouwd naar de design-handoff
-(`design_handoff_video_review`). Data is nu nog een in-memory prototype-store
-(`lib/store.ts`); het Postgres-schema voor de echte back-end staat klaar in
-`db/schema.sql` en de API-routes staan beschreven in de Tech Notitie (sectie 4).
+Next.js (UI + API-routes) + Postgres 16 + een ffmpeg-worker, alles in Docker op
+de NAS achter Caddy (zie `docker-compose.yml`). De app is bewust dun: hij bewaart
+projecten en comments, en verwijst voor de bytes naar Immich.
 
-- `/` — dashboard (alleen editor): projectgrid, stats, ⋯-menu (versie toevoegen,
-  hernoemen, share, archiveren), Immich-picker met gesimuleerde ffmpeg-progress,
-  share-modal.
-- `/review/[id]` — reviewpagina: frame-accurate player (25 fps, rAF), pins
-  (sleepbaar), tekenen (SVG, genormaliseerde paden), comment-rail met sorteren,
-  filter, resolve, 👍, replies, soft-delete en versie-carry-over.
-- `/review/[id]?as=client` — "Preview as client" (naam-gate).
-- `/r/[token]` — de gedeelde gastlink.
+- `/` — dashboard (alleen editor, login via `/login`): projectgrid met echte
+  posters, live stats, ⋯-menu (versie toevoegen, hernoemen, share, archiveren),
+  Immich-picker, ffmpeg-voortgang uit de worker.
+- `/review/[id]` — reviewpagina (editor): frame-accurate `<video>`-player op de
+  1080p-proxy (frame = `round(t·fps)`, seek op `(frame+0.5)/fps`), sleepbare pins
+  (letterbox-correct), tekenen in SVG, comment-rail met sorteren/filter/resolve/
+  👍/replies/soft-delete en versie-carry-over. Live updates via SSE.
+- `/r/[token]` — de gedeelde gastlink: naam-gate (en wachtwoord als ingesteld),
+  httpOnly guest-cookie, daarna dezelfde reviewpagina.
+- `/stream/:versionId` — proxy-mp4 met Range-support (206) en token-check;
+  `?download=1` voor de proxy-download, `?original=1` streamt het origineel door
+  uit Immich. De client ziet nooit een Immich-URL.
 
-## Draaien
+Zonder `IMMICH_URL` draait alles in **mock-modus**: de picker toont demobestanden
+en de worker genereert testclips — de hele flow werkt dan lokaal zonder NAS.
+
+## Draaien (dev)
 
 ```bash
 npm install
-npm run dev   # http://localhost:3000
+cp .env.example .env          # DATABASE_URL, SESSION_SECRET, EDITOR_* invullen
+npm run migrate && npm run seed
+npm run worker &              # ffmpeg-transcodes
+npm run dev                   # http://localhost:3000 → /login
 ```
+
+Productie op de NAS: `docker compose up -d` (zet eerst `.env`, zie
+`docker-compose.yml` voor de vereiste variabelen).
 
 ## Sneltoetsen (reviewpagina)
 
@@ -43,10 +55,16 @@ npm run dev   # http://localhost:3000
 5. Alleen de editor krijgt mail; klanten worden door de editor zelf geïnformeerd.
 6. Projecten worden gearchiveerd, nooit verwijderd.
 
-## Volgende stappen (bouworde uit de Tech Notitie)
+## Status t.o.v. de bouworde (Tech Notitie §10)
 
-1. ✅ Player met frame-accurate timecode + comments/rail/resolve + gastflow + pin/tekenen (deze front-end)
-2. Postgres aansluiten (`db/schema.sql`) + API-routes uit sectie 4
-3. Transcode-worker (ffmpeg 1080p proxy, korte GOP) + Immich-koppeling (server-to-server, API-key blijft op de NAS)
-4. `/stream/:versionId` met Range-support en token-check
-5. Gebundelde feedbackmail naar de editor + SSE voor live comments
+1. ✅ Schema (`db/schema.sql`) + frame-accurate player
+2. ✅ Comments met frame + rail, sorteren en resolve
+3. ✅ Gastlink + naam-flow en share-modal (wachtwoord, download, expiry)
+4. ✅ Pin op de frame + tekenen (genormaliseerde SVG-paden in `drawing` jsonb)
+5. ✅ Transcode-worker (`scripts/worker.mjs`: 1080p H.264, GOP = 1 s, poster,
+   ffprobe-metadata) + Immich-picker in het dashboard
+6. ✅ Gebundelde digestmail naar de editor (venster ~10 min, SMTP via env) + SSE
+
+Nog open richting echte NAS-deploy: Immich-endpointnamen checken tegen
+`/api/api-docs` van je eigen installatie (§5), en mobiel (tap = pin,
+sticky composer, optie 2a) is nog niet gebouwd.
