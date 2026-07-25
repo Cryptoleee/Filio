@@ -39,12 +39,22 @@ export default function Review({ source, preview = false }: { source: ReviewSour
   // versies
   const [version, setVersion] = useState(0); // 0 = nog niet gekozen → laatste
 
-  // composer
+  // composer — compact veldje dat bij de pin openklapt
+  const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [pin, setPin] = useState<{ x: number; y: number } | null>(null);
   const [draftStrokes, setDraftStrokes] = useState<Stroke[]>([]);
   const [drawMode, setDrawMode] = useState(false);
   const [liveStroke, setLiveStroke] = useState<Stroke | null>(null);
+
+  const closeComposer = () => {
+    setComposerOpen(false);
+    setPin(null);
+    setDraft('');
+    setDraftStrokes([]);
+    setDrawMode(false);
+    setLiveStroke(null);
+  };
 
   // rail
   const [sort, setSort] = useState<Sort>('timecode');
@@ -136,6 +146,13 @@ export default function Review({ source, preview = false }: { source: ReviewSour
     [totalFrames, fps, ready]
   );
 
+  // Afspelen ruimt de pending pin en de open composer op — anders blijft
+  // de stip in beeld staan terwijl de video doorloopt.
+  useEffect(() => {
+    if (playing) closeComposer();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing]);
+
   // ---- afspelen: echte video indien ready, anders synthetische klok ----
   useEffect(() => {
     const video = videoRef.current;
@@ -198,7 +215,8 @@ export default function Review({ source, preview = false }: { source: ReviewSour
       } else if (e.key.toLowerCase() === 'c') {
         e.preventDefault();
         setPlaying(false);
-        taRef.current?.focus();
+        setComposerOpen(true);
+        setTimeout(() => taRef.current?.focus(), 0);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -312,6 +330,8 @@ export default function Review({ source, preview = false }: { source: ReviewSour
   const placePin = (f: { x: number; y: number }) => {
     setPlaying(false);
     setPin(f);
+    setComposerOpen(true);
+    setTimeout(() => taRef.current?.focus(), 0);
   };
 
   const onBoxClick = (e: React.MouseEvent) => {
@@ -386,11 +406,7 @@ export default function Review({ source, preview = false }: { source: ReviewSour
       method: 'POST',
       body: JSON.stringify({ body: draft.trim(), frame, pin, strokes: draftStrokes }),
     });
-    setDraft('');
-    setPin(null);
-    setDraftStrokes([]);
-    setDrawMode(false);
-    setLiveStroke(null);
+    closeComposer();
     await load();
     setSelected(res.id);
   };
@@ -582,59 +598,6 @@ export default function Review({ source, preview = false }: { source: ReviewSour
     );
   };
 
-  // De composer staat op desktop onder de controls; op smal (2a) als sticky
-  // balk onderaan de scrollende kolom, ná de comment-rail.
-  const composerEl = (
-    <div className={`composer ${narrow ? 'composerSticky' : ''}`}>
-      <Avatar name={displayMe} size={30} />
-      <div className={`composerCard ${draft.trim() ? 'hasDraft' : ''}`}>
-        <div className="composerHead">
-          <span className="tcChip">@ {timecode(frame, fps)}</span>
-          <span className="composerAs">
-            Commenting as <b>{displayMe}</b>
-          </span>
-        </div>
-        <textarea
-          ref={taRef}
-          className="composerTa"
-          rows={2}
-          placeholder="Leave feedback at this frame…  (⌘/Ctrl + Enter to post)"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onFocus={() => setPlaying(false)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void post();
-          }}
-        />
-        <div className="composerActions">
-          <button className={`compChip ${pin ? 'active' : ''}`} onClick={() => pin && setPin(null)}>
-            {pin
-              ? '◉ Pin placed — drag to move · click to clear'
-              : narrow
-                ? '◉ Tap the frame to pin'
-                : '◉ Click the frame to pin'}
-          </button>
-          <button
-            className={`compChip ${drawMode ? 'active' : ''}`}
-            onClick={() => {
-              setPlaying(false);
-              setDrawMode(!drawMode);
-            }}
-          >
-            {drawMode ? '✎ Drawing — click to stop' : '✎ Draw'}
-          </button>
-          {draftStrokes.length > 0 && (
-            <button className="compChip" onClick={() => setDraftStrokes((d) => d.slice(0, -1))}>
-              ↺ Undo
-            </button>
-          )}
-          <button className={`postBtn ${draft.trim() ? 'ready' : ''}`} onClick={() => void post()}>
-            Post
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 
   return (
     <div className="main" style={{ height: '100vh' }}>
@@ -835,6 +798,69 @@ export default function Review({ source, preview = false }: { source: ReviewSour
                 onClick={(e) => e.stopPropagation()}
               />
             )}
+
+            {/* compacte composer die bij de pin openklapt */}
+            {composerOpen && !gate && (
+              <div
+                className={`pinComposer ${draft.trim() ? 'hasDraft' : ''}`}
+                style={{
+                  ...(pin ? planePct(pin.x, pin.y) : { left: '50%', top: '66%' }),
+                  transform: `${
+                    flipTipX(pin?.x ?? 0.5)
+                      ? 'translateX(-100%) translateX(-18px)'
+                      : 'translateX(18px)'
+                  } ${(pin?.y ?? 0.66) > 0.6 ? 'translateY(-100%)' : ''}`,
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="pinComposerHead">
+                  <span className="tcChip">@ {timecode(frame, fps)}</span>
+                  <span className="pinComposerAs">{displayMe}</span>
+                  <button className="pinComposerClose" onClick={closeComposer}>✕</button>
+                </div>
+                <textarea
+                  ref={taRef}
+                  className="pinComposerTa"
+                  rows={2}
+                  autoFocus
+                  placeholder={pin ? 'Feedback bij deze pin…' : 'Feedback bij dit frame…'}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void post();
+                    }
+                    if (e.key === 'Escape') closeComposer();
+                  }}
+                />
+                <div className="pinComposerActions">
+                  <button
+                    className={`compChip ${drawMode ? 'active' : ''}`}
+                    title="Tekenen op de frame"
+                    onClick={() => setDrawMode(!drawMode)}
+                  >
+                    ✎
+                  </button>
+                  {draftStrokes.length > 0 && (
+                    <button
+                      className="compChip"
+                      title="Laatste lijn ongedaan maken"
+                      onClick={() => setDraftStrokes((d) => d.slice(0, -1))}
+                    >
+                      ↺
+                    </button>
+                  )}
+                  <button
+                    className={`sendBtn pinComposerSend ${draft.trim() ? '' : 'dim'}`}
+                    onClick={() => void post()}
+                  >
+                    ↑
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="controls">
@@ -890,7 +916,6 @@ export default function Review({ source, preview = false }: { source: ReviewSour
             </div>
           </div>
 
-          {!narrow && composerEl}
         </div>
 
         <aside className="commentRail">
@@ -962,7 +987,6 @@ export default function Review({ source, preview = false }: { source: ReviewSour
           </div>
         </aside>
 
-        {narrow && composerEl}
       </div>
 
       {gate && (
