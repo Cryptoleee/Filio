@@ -36,8 +36,8 @@ npm run worker &              # ffmpeg-transcodes
 npm run dev                   # http://localhost:3000 → /login
 ```
 
-Productie op de NAS: `docker compose up -d` (zet eerst `.env`, zie
-`docker-compose.yml` voor de vereiste variabelen).
+Productie op de NAS: zie **[DEPLOY.md](DEPLOY.md)** voor de volledige
+stap-voor-stap installatie (Docker, `.env`, domein + TLS via Caddy).
 
 ## Sneltoetsen (reviewpagina)
 

@@ -1,24 +1,21 @@
-# Alles in Docker op de UGREEN NAS, achter één reverse proxy met TLS (§9).
-# Backup: alleen postgres hoeft een dump — proxies zijn wegwerpbaar,
+# Alles in Docker op de NAS (Tech Notitie §9).
+#
+#   docker compose up -d --build                  → app op http://<nas-ip>:3000
+#   docker compose --profile proxy up -d --build  → + Caddy met TLS op je domein
+#
+# Instellingen komen uit .env (zie DEPLOY.md).
+# Backup: alleen ./data/db hoeft een dump — proxies zijn wegwerpbaar,
 # originelen zitten al in Immich.
 services:
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    ports:
-      - '80:80'
-      - '443:443'
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-
   web:
     build: .
     restart: unless-stopped
     command: sh -c "node scripts/migrate.mjs && node scripts/seed.mjs && npm run start"
+    ports:
+      - '3000:3000'
     environment: &appenv
       DATABASE_URL: postgresql://filio:${DB_PASSWORD:-filio}@db:5432/filio
-      APP_URL: ${APP_URL:-https://review.jouwdomein.nl}
+      APP_URL: ${APP_URL:-http://localhost:3000}
       SESSION_SECRET: ${SESSION_SECRET:?zet SESSION_SECRET in .env}
       PROXY_DIR: /proxies
       IMMICH_URL: ${IMMICH_URL:-}
@@ -32,9 +29,10 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
     volumes:
-      - /volume/docker/review/proxies:/proxies
+      - ./data/proxies:/proxies
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   worker:
     build: .
@@ -42,9 +40,10 @@ services:
     command: npm run worker
     environment: *appenv
     volumes:
-      - /volume/docker/review/proxies:/proxies
+      - ./data/proxies:/proxies
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   db:
     image: postgres:16
@@ -54,7 +53,27 @@ services:
       POSTGRES_USER: filio
       POSTGRES_PASSWORD: ${DB_PASSWORD:-filio}
     volumes:
-      - /volume/docker/review/db:/var/lib/postgresql/data
+      - ./data/db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U filio -d filio']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # Alleen nodig zodra je de app via je eigen domein openbaar maakt (stap 6 in
+  # DEPLOY.md). Caddy regelt de TLS-certificaten automatisch.
+  caddy:
+    image: caddy:2
+    profiles: [proxy]
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      REVIEW_DOMAIN: ${REVIEW_DOMAIN:-review.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
 
 volumes:
   caddy-data:

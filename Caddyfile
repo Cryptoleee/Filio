@@ -1,4 +1,5 @@
-# TLS + reverse proxy. Vervang het domein; Caddy regelt certificaten zelf.
-review.jouwdomein.nl {
+# TLS + reverse proxy. Het domein komt uit REVIEW_DOMAIN in .env —
+# hier hoef je niets aan te passen. Caddy haalt zelf certificaten op.
+{$REVIEW_DOMAIN} {
 	reverse_proxy web:3000
 }
