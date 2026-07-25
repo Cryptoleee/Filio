@@ -1,5 +1,6 @@
 // Maakt het (enige) editor-account aan als het nog niet bestaat.
 // Env: EDITOR_EMAIL, EDITOR_PASSWORD, EDITOR_NAME.
+import './env.mjs';
 import { randomBytes, scryptSync } from 'node:crypto';
 import pg from 'pg';
 

@@ -5,6 +5,7 @@
 //
 // Proxies gaan naar PROXY_DIR — nooit terug de Immich-library in.
 
+import './env.mjs';
 import { spawn } from 'node:child_process';
 import { createWriteStream, mkdirSync, statSync, unlinkSync } from 'node:fs';
 import { Readable } from 'node:stream';

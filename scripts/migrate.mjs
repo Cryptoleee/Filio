@@ -1,4 +1,5 @@
 // Draait db/schema.sql als de tabellen nog niet bestaan.
+import './env.mjs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
