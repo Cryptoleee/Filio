@@ -9,9 +9,10 @@ export interface ImmichVideo {
   sizeBytes: number;
   codec: string;
   takenLabel: string;
+  createdAt: string; // voor sortering: nieuwste eerst
 }
 
-const MOCK_VIDEOS: ImmichVideo[] = [
+const MOCK_VIDEOS: Omit<ImmichVideo, 'createdAt'>[] = [
   {
     id: 'mock-zeeuwse-v4',
     filename: 'zeeuwse-kust_v4_prores.mov',
@@ -45,7 +46,10 @@ export function immichConfigured(): boolean {
 export async function searchVideos(q: string): Promise<ImmichVideo[]> {
   if (!immichConfigured()) {
     const needle = q.toLowerCase();
-    return MOCK_VIDEOS.filter((v) => v.filename.toLowerCase().includes(needle));
+    return MOCK_VIDEOS.filter((v) => v.filename.toLowerCase().includes(needle)).map((v) => ({
+      ...v,
+      createdAt: '',
+    }));
   }
   // Endpointnamen verschillen per Immich-versie — check /api/api-docs van je
   // eigen installatie (Tech Notitie §5). Geverifieerd tegen Immich v3.0.x:
@@ -59,21 +63,26 @@ export async function searchVideos(q: string): Promise<ImmichVideo[]> {
     body: JSON.stringify({
       type: 'VIDEO',
       originalFileName: q || undefined,
-      size: 50,
+      size: 100,
+      order: 'desc',
       withExif: true,
     }),
   });
   if (!res.ok) throw new Error(`Immich search failed: ${res.status}`);
   const data = await res.json();
   const assets: any[] = data?.assets?.items ?? [];
-  return assets.map((a) => ({
-    id: a.id,
-    filename: a.originalFileName ?? a.id,
-    durationLabel: durationLabel(a.duration),
-    sizeBytes: Number(a.exifInfo?.fileSizeInByte ?? 0),
-    codec: codecLabel(a),
-    takenLabel: String(a.fileCreatedAt ?? '').slice(0, 10) || '—',
-  }));
+  return assets
+    .map((a) => ({
+      id: a.id,
+      filename: a.originalFileName ?? a.id,
+      durationLabel: durationLabel(a.duration),
+      sizeBytes: Number(a.exifInfo?.fileSizeInByte ?? 0),
+      codec: codecLabel(a),
+      takenLabel: String(a.fileCreatedAt ?? '').slice(0, 10) || '—',
+      createdAt: String(a.fileCreatedAt ?? ''),
+    }))
+    // nieuwste upload bovenaan, ongeacht wat Immich teruggeeft
+    .sort((x, y) => y.createdAt.localeCompare(x.createdAt));
 }
 
 // Immich levert duration als ms-getal (v3) of als "H:MM:SS.mmm"-string (v1/v2).
@@ -100,6 +109,6 @@ function codecLabel(a: any): string {
   return (ext || 'VIDEO').toUpperCase();
 }
 
-export function mockVideoById(id: string): ImmichVideo | undefined {
+export function mockVideoById(id: string): Omit<ImmichVideo, 'createdAt'> | undefined {
   return MOCK_VIDEOS.find((v) => v.id === id);
 }

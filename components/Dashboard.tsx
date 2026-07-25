@@ -332,12 +332,17 @@ function ImmichPicker({
 }) {
   const [rows, setRows] = useState<ImmichVideoRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState('');
 
+  // Zoeken op bestandsnaam in Immich, met een korte debounce
   useEffect(() => {
-    api<{ videos: ImmichVideoRow[] }>('/api/immich/videos')
-      .then((d) => setRows(d.videos))
-      .catch((e) => setError(String(e.message)));
-  }, []);
+    const t = setTimeout(() => {
+      api<{ videos: ImmichVideoRow[] }>(`/api/immich/videos?q=${encodeURIComponent(q)}`)
+        .then((d) => setRows(d.videos))
+        .catch((e) => setError(String(e.message)));
+    }, q ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [q]);
 
   return (
     <div className="backdrop" onClick={onClose}>
@@ -355,10 +360,22 @@ function ImmichPicker({
           </div>
           <button className="modalClose" onClick={onClose}>✕</button>
         </div>
+        <input
+          className="search pickerSearch"
+          autoFocus
+          placeholder="Zoek op bestandsnaam…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
         <div className="pickerRows">
           {error && <div style={{ color: 'var(--destructive)', fontSize: 12 }}>{error}</div>}
           {rows === null && !error && (
             <div style={{ color: 'var(--text-meta)', fontSize: 12 }}>Immich doorzoeken…</div>
+          )}
+          {rows?.length === 0 && (
+            <div style={{ color: 'var(--text-meta)', fontSize: 12, padding: '8px 2px' }}>
+              Geen video&apos;s gevonden{q ? ` voor “${q}”` : ''}.
+            </div>
           )}
           {rows?.map((f) => (
             <div className="pickerRow" key={f.id}>

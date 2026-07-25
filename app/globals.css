@@ -395,7 +395,13 @@ a { color: inherit; text-decoration: none; }
   padding: 20px;
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
 }
-.modal.picker { max-width: 520px; }
+.modal.picker {
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  max-height: min(640px, 86vh);
+}
+.pickerSearch { max-width: none; margin-bottom: 12px; flex: none; }
 .modalHead { display: flex; align-items: flex-start; margin-bottom: 16px; }
 .modalTitle { font-size: 17px; font-weight: 500; color: var(--text); }
 .modalSub { margin-top: 3px; font-size: 11.5px; color: var(--text-meta); }
@@ -498,7 +504,14 @@ a { color: inherit; text-decoration: none; }
   align-items: baseline;
 }
 
-.pickerRows { display: flex; flex-direction: column; gap: 8px; }
+.pickerRows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
 .pickerRow {
   display: flex;
   align-items: center;
