@@ -50,6 +50,7 @@ export interface ReviewPayload {
     shareUrl: string | null; // alleen voor de editor
     proxyLabel: string | null;
     originalLabel: string | null;
+    accentHue: number | null; // eigen projectkleur, null = studio-accent
   };
   versions: ApiVersion[];
   comments: ApiComment[];
@@ -69,6 +70,7 @@ export interface ProjectSummary {
   durationLabel: string | null;
   posterUrl: string | null;
   shareToken: string | null;
+  accentHue: number | null;
 }
 
 export interface DashboardPayload {

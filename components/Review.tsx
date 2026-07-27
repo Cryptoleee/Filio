@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Avatar from './Avatar';
-import Logo from './Logo';
+import Brand from './Branding';
 import { DEFAULT_FPS, PLACEHOLDER_FRAMES, timecode } from '@/lib/data';
 import { ApiError, api, timeAgo } from '@/lib/api';
 import type { ApiComment, ApiVersion, ReviewPayload, Stroke } from '@/lib/types';
@@ -69,6 +69,7 @@ export default function Review({ source, preview = false }: { source: ReviewSour
   const [dragging, setDragging] = useState<null | { kind: 'draft' } | { kind: 'comment'; id: number }>(null);
   const [editing, setEditing] = useState<{ id: number; draft: string } | null>(null);
   const [narrow, setNarrow] = useState(false);
+  const [boxAspect, setBoxAspect] = useState(16 / 9);
   const coarseRef = useRef(false);
   const lastTapRef = useRef(0);
   const tapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -224,21 +225,33 @@ export default function Review({ source, preview = false }: { source: ReviewSour
   }, [totalFrames, fps, ready]);
 
   // ---- letterboxing: reken tegen het werkelijke videovlak, niet het element ----
+  // Het videovak vult de beschikbare hoogte, dus meten we zijn verhouding
+  // in plaats van 16/9 aan te nemen — anders staan pins scheef.
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) setBoxAspect(r.width / r.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const videoAspect = v?.width && v?.height ? v.width / v.height : 16 / 9;
-  const BOX_ASPECT = 16 / 9;
   const plane =
-    videoAspect >= BOX_ASPECT
+    videoAspect >= boxAspect
       ? {
           left: 0,
           width: 1,
-          top: (1 - BOX_ASPECT / videoAspect) / 2,
-          height: BOX_ASPECT / videoAspect,
+          top: (1 - boxAspect / videoAspect) / 2,
+          height: boxAspect / videoAspect,
         }
       : {
           top: 0,
           height: 1,
-          left: (1 - videoAspect / BOX_ASPECT) / 2,
-          width: videoAspect / BOX_ASPECT,
+          left: (1 - videoAspect / boxAspect) / 2,
+          width: videoAspect / boxAspect,
         };
 
   const fracFromEvent = (e: { clientX: number; clientY: number }) => {
@@ -493,6 +506,11 @@ export default function Review({ source, preview = false }: { source: ReviewSour
     : 'NOT SHARED YET';
   const allowDownload = payload?.project.allowDownload ?? false;
 
+  // Eigen projectkleur overschrijft het studio-accent voor deze pagina
+  const accentStyle = (payload?.project.accentHue != null
+    ? { ['--accent-h' as string]: payload.project.accentHue }
+    : undefined) as React.CSSProperties | undefined;
+
   const displayName = (c: { name: string; mine: boolean }) =>
     c.mine && viewerIsEditor ? 'You' : c.name;
 
@@ -600,9 +618,9 @@ export default function Review({ source, preview = false }: { source: ReviewSour
 
 
   return (
-    <div className="main" style={{ height: '100vh' }}>
+    <div className="main reviewRoot" style={accentStyle}>
       <header className="rvHeader">
-        {guestChrome ? <Logo size={26} /> : <Link href="/"><Logo size={26} /></Link>}
+        {guestChrome ? <Brand size={26} /> : <Link href="/"><Brand size={26} /></Link>}
         {!guestChrome && <Link className="backLink" href="/">← Projects</Link>}
         <div className="headDivider" />
         <div className="rvTitleWrap">
@@ -992,7 +1010,7 @@ export default function Review({ source, preview = false }: { source: ReviewSour
       {gate && (
         <div className="backdrop">
           <div className="gateModal">
-            <Logo size={34} />
+            <Brand size={34} />
             <div className="gateTitle">{gate.projectTitle}</div>
             <div className="gateExplainer">
               Je bent uitgenodigd om deze cut te bekijken en feedback te geven.

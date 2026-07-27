@@ -3,9 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Avatar from './Avatar';
-import Logo from './Logo';
+import Link from 'next/link';
+import Brand from './Branding';
 import { ApiError, api } from '@/lib/api';
 import type { DashboardPayload, ImmichVideoRow, ProjectSummary, SharePayload } from '@/lib/types';
+
+const MENU_HUES: (number | null)[] = [null, 78, 30, 12, 330, 265, 230, 195, 160];
 
 type PickerMode = { kind: 'version'; project: ProjectSummary } | { kind: 'project' };
 
@@ -98,11 +101,11 @@ export default function Dashboard() {
     <div className="shell">
       <nav className="rail">
         <div className="railLogo">
-          <Logo size={30} />
+          <Brand size={30} />
         </div>
-        <div className="railItem active" title="Projects">▤</div>
+        <div className="railItem active" title="Projecten">▤</div>
         <div className="railItem" title="Recent">◷</div>
-        <div className="railItem" title="Settings">⚙</div>
+        <Link className="railItem" href="/settings" title="Instellingen">⚙</Link>
         <div className="railSpacer" />
         <Avatar name={payload?.viewer.name ?? '·'} size={30} />
       </nav>
@@ -182,7 +185,12 @@ export default function Dashboard() {
                 .filter(Boolean)
                 .join(' · ');
               return (
-                <div key={p.id} className="card" onClick={() => router.push(`/review/${p.id}`)}>
+                <div
+                  key={p.id}
+                  className="card"
+                  style={p.accentHue != null ? ({ ['--accent-h']: p.accentHue } as React.CSSProperties) : undefined}
+                  onClick={() => router.push(`/review/${p.id}`)}
+                >
                   <div
                     className="thumb"
                     style={
@@ -286,6 +294,27 @@ export default function Dashboard() {
                       >
                         <span className="menuIcon">⧉</span> Copy review link
                       </button>
+                      <div className="menuSep" />
+                      <div className="menuHues">
+                        <span className="menuHuesLabel">Projectkleur</span>
+                        <div className="menuHuesRow">
+                          {MENU_HUES.map((h) => (
+                            <button
+                              key={h ?? 'auto'}
+                              className={`menuHue ${(p.accentHue ?? null) === h ? 'active' : ''} ${h === null ? 'auto' : ''}`}
+                              style={h === null ? undefined : ({ ['--accent-h']: h } as React.CSSProperties)}
+                              title={h === null ? 'Studiokleur' : `Hue ${h}`}
+                              onClick={async () => {
+                                await api(`/api/projects/${p.id}`, {
+                                  method: 'PATCH',
+                                  body: JSON.stringify({ accentHue: h }),
+                                });
+                                void load();
+                              }}
+                            />
+                          ))}
+                        </div>
+                      </div>
                       <div className="menuSep" />
                       <button
                         className="menuItem destructive"

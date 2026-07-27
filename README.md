@@ -57,7 +57,7 @@ stap-voor-stap installatie (Docker, `.env`, domein + TLS via Caddy).
 
 ## Status t.o.v. de bouworde (Tech Notitie §10)
 
-1. ✅ Schema (`db/schema.sql`) + frame-accurate player
+1. ✅ Schema (`db/migrations/`) + frame-accurate player
 2. ✅ Comments met frame + rail, sorteren en resolve
 3. ✅ Gastlink + naam-flow en share-modal (wachtwoord, download, expiry)
 4. ✅ Pin op de frame + tekenen (genormaliseerde SVG-paden in `drawing` jsonb)
@@ -67,6 +67,11 @@ stap-voor-stap installatie (Docker, `.env`, domein + TLS via Caddy).
 7. ✅ Mobiel (2a): tap = pin, dubbel-tap = fullscreen, composer als sticky balk;
    pins en tekenen werken via pointer events ook op touch. Eigen comments zijn
    inline te bewerken (besloten regel 2).
+8. ✅ Huisstijl in `/settings`: eigen logo, studionaam en accentkleur (ook per
+   project), plus een instelbare interface-grootte voor grote schermen.
+
+Database-updates lopen via genummerde migraties in `db/migrations/`; de web-container
+draait `npm run migrate` bij elke start, dus een update vraagt geen handwerk.
 
 Nog open richting echte NAS-deploy: Immich-endpointnamen checken tegen
 `/api/api-docs` van je eigen installatie (§5) — de client zit in

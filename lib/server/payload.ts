@@ -141,6 +141,7 @@ export async function reviewPayload(projectId: number, actor: Actor): Promise<Re
       originalLabel: latest
         ? [latest.orig_filename, formatBytes(latest.orig_bytes)].filter(Boolean).join(' · ') || null
         : null,
+      accentHue: project.accent_hue ?? null,
     },
     versions: versionRows.map(mapVersion),
     comments: await mapComments(projectId, actor),
@@ -198,6 +199,7 @@ export async function dashboardPayload(editorName: string): Promise<DashboardPay
       durationLabel: durationLabel(p.v_duration_ms),
       posterUrl: p.v_poster_path && p.v_id ? `/thumb/${p.v_id}` : null,
       shareToken: share?.token ?? null,
+      accentHue: p.accent_hue ?? null,
     });
   }
 

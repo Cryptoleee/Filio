@@ -16,20 +16,34 @@
   --text-2: rgba(255, 255, 255, 0.45);
   --text-meta: rgba(255, 255, 255, 0.38);
   --text-faint: rgba(255, 255, 255, 0.28);
-  --amber: oklch(0.82 0.15 78);
-  --amber-bright: oklch(0.85 0.15 78);
-  --amber-draw: oklch(0.9 0.13 78);
-  --amber-07: oklch(0.82 0.15 78 / 0.07);
-  --amber-14: oklch(0.82 0.15 78 / 0.14);
-  --amber-16: oklch(0.82 0.15 78 / 0.16);
-  --amber-18: oklch(0.82 0.15 78 / 0.18);
-  --amber-25: oklch(0.82 0.15 78 / 0.25);
+  --accent-h: 78;
   --on-amber: #17140c;
   --destructive: oklch(0.68 0.15 25);
   --font-ui: 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, Menlo, monospace;
   --stripes: repeating-linear-gradient(115deg, #17171a 0 14px, #101012 14px 28px);
   --stripes-thumb: repeating-linear-gradient(115deg, #1a1a1d 0 12px, #131316 12px 24px);
+}
+
+/* Accentkleur: alleen de hue verschilt per studio/project (0–360). Lichtheid en
+   chroma liggen vast, zodat het ontwerp bij elke kleur klopt. Deze afgeleiden
+   staan op elk element dat --accent-h mag overschrijven (project, review, dots),
+   want custom properties worden berekend waar ze gedefinieerd worden. */
+:root,
+.brandRoot,
+.card,
+.reviewRoot,
+.hueDot,
+.menuHue {
+  --amber: oklch(0.82 0.15 var(--accent-h));
+  --amber-bright: oklch(0.85 0.15 var(--accent-h));
+  --amber-draw: oklch(0.9 0.13 var(--accent-h));
+  --amber-07: oklch(0.82 0.15 var(--accent-h) / 0.07);
+  --amber-14: oklch(0.82 0.15 var(--accent-h) / 0.14);
+  --amber-16: oklch(0.82 0.15 var(--accent-h) / 0.16);
+  --amber-18: oklch(0.82 0.15 var(--accent-h) / 0.18);
+  --amber-25: oklch(0.82 0.15 var(--accent-h) / 0.25);
+  --amber-55: oklch(0.82 0.15 var(--accent-h) / 0.55);
 }
 
 * { box-sizing: border-box; }
@@ -55,8 +69,15 @@ button, input, textarea {
 button { cursor: pointer; }
 a { color: inherit; text-decoration: none; }
 
+/* ============ Interface-grootte ============
+   --zoom wordt vóór het renderen gezet (script in de layout) op basis van de
+   schermbreedte, of op de keuze van de editor uit Instellingen. Viewport-units
+   schalen niet mee met zoom, dus 100vh compenseren we met dezelfde factor. */
+.brandRoot { zoom: var(--zoom, 1); }
+
 /* ============ App shell ============ */
-.shell { display: flex; height: 100vh; }
+.shell { display: flex; height: calc(100vh / var(--zoom, 1)); }
+.reviewRoot { height: calc(100vh / var(--zoom, 1)); }
 
 .rail {
   width: 60px;
@@ -93,6 +114,12 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ============ Logo & avatars ============ */
+.brandLogo {
+  object-fit: contain;
+  border-radius: 6px;
+  flex: none;
+  display: block;
+}
 .logoSq {
   background: var(--stripes);
   border: 1px solid var(--border-3);
@@ -343,6 +370,26 @@ a { color: inherit; text-decoration: none; }
 .menuItem.destructive { color: var(--destructive); }
 .menuIcon { width: 14px; text-align: center; opacity: 0.7; flex: none; }
 .menuSep { height: 1px; background: var(--border-1); margin: 5px 4px; }
+.menuHues { padding: 4px 9px 6px; }
+.menuHuesLabel {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-meta);
+  margin-bottom: 7px;
+}
+.menuHuesRow { display: flex; gap: 6px; flex-wrap: wrap; }
+.menuHue {
+  width: 18px;
+  height: 18px;
+  border-radius: 99px;
+  background: var(--amber);
+  border: 2px solid transparent;
+}
+.menuHue.auto {
+  background: repeating-linear-gradient(115deg, #3a3a40 0 4px, #232327 4px 8px);
+}
+.menuHue.active { border-color: #fff; }
 
 .newTile {
   border: 1px dashed rgba(255, 255, 255, 0.14);
@@ -374,6 +421,66 @@ a { color: inherit; text-decoration: none; }
   letter-spacing: 0.08em;
   color: var(--text-faint);
 }
+
+/* ============ Instellingen ============ */
+.settingsWrap {
+  max-width: 720px;
+  padding: 20px 22px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.settingsCard {
+  background: var(--card);
+  border: 1px solid var(--border-2);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+.settingsTitle { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.settingsHint { margin: 5px 0 6px; font-size: 12px; color: var(--text-2); }
+.settingsRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.settingsLabel { flex: 1; min-width: 0; }
+.settingsInput {
+  width: 220px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--input);
+  border: 1px solid var(--border-3);
+  padding: 0 11px;
+  font-size: 13px;
+  color: var(--text);
+}
+.settingsInput:focus { border-color: var(--amber); }
+.logoControls { display: flex; align-items: center; gap: 10px; }
+.logoPreview {
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hueRow { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; max-width: 260px; }
+.hueDot {
+  width: 24px;
+  height: 24px;
+  border-radius: 99px;
+  background: var(--amber);
+  border: 2px solid transparent;
+  outline-offset: 2px;
+}
+.hueDot.active { border-color: #fff; }
+.scaleRow { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.savedFlash { font-size: 12px; font-weight: 500; color: var(--amber); }
+.errorFlash { font-size: 12px; font-weight: 500; color: var(--destructive); }
 
 /* ============ Modals ============ */
 .backdrop {
@@ -716,9 +823,9 @@ a { color: inherit; text-decoration: none; }
 .videoCol {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
   background: var(--bg);
 }
 .commentRail {
@@ -732,7 +839,7 @@ a { color: inherit; text-decoration: none; }
 }
 @media (max-width: 900px) {
   .rvBody { flex-direction: column; overflow-y: auto; }
-  .videoCol { flex: none; overflow: visible; }
+  .videoCol { flex: none; overflow: visible; min-height: auto; }
   .commentRail {
     width: 100%;
     border-left: none;
@@ -742,15 +849,20 @@ a { color: inherit; text-decoration: none; }
 }
 
 /* ---- video area ---- */
+/* Het videovak vult de resterende hoogte, zodat de afspeelbalk altijd in
+   beeld blijft. Onder 900px (rail eronder) valt hij terug op 16/9. */
 .videoBox {
   position: relative;
-  aspect-ratio: 16 / 9;
   background: var(--stripes);
   cursor: crosshair;
   overflow: hidden;
-  flex: none;
+  flex: 1;
+  min-height: 240px;
   user-select: none;
   touch-action: none; /* tekenen en pin-drag mogen niet scrollen */
+}
+@media (max-width: 900px) {
+  .videoBox { flex: none; aspect-ratio: 16 / 9; min-height: 0; }
 }
 .videoBox:fullscreen { aspect-ratio: auto; }
 .videoEl {
@@ -863,7 +975,7 @@ a { color: inherit; text-decoration: none; }
   z-index: 12;
   cursor: default;
 }
-.pinComposer.hasDraft { border-color: oklch(0.82 0.15 78 / 0.55); }
+.pinComposer.hasDraft { border-color: var(--amber-55); }
 .pinComposerHead { display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
 .pinComposerAs {
   font-size: 10.5px;
@@ -994,7 +1106,7 @@ a { color: inherit; text-decoration: none; }
   border-radius: 12px;
   padding: 10px 12px;
 }
-.composerCard.hasDraft { border-color: oklch(0.82 0.15 78 / 0.55); }
+.composerCard.hasDraft { border-color: var(--amber-55); }
 .composerHead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .tcChip {
   background: var(--amber-16);

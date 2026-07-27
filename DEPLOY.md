@@ -131,10 +131,13 @@ Je fotobibliotheek hoeft niet publiek bereikbaar te zijn — de reviewsite wel.
   ```bash
   docker compose exec db pg_dump -U filio filio > backup-$(date +%F).sql
   ```
-- **Update naar een nieuwe versie**:
+- **Update naar een nieuwe versie** (databasemigraties draaien automatisch mee):
   ```bash
-  git pull && docker compose --profile proxy up -d --build
+  cd ~ && wget https://github.com/cryptoleee/filio/archive/refs/heads/main.tar.gz -O filio.tar.gz \
+    && tar -xzf filio.tar.gz && cp -r Filio-main/* filio/ && cd filio \
+    && sudo docker compose --profile proxy up -d --build
   ```
+  Je `.env` en de map `data/` (database + proxies) blijven daarbij staan.
 - **Logs bekijken**: `docker compose logs -f web` (of `worker` / `caddy`).
 - **Mail-digest aanzetten** (optioneel): vul de `SMTP_*`-regels in `.env` in;
   zonder SMTP verschijnt de gebundelde feedbackmail alleen in de logs.

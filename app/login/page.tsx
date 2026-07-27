@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import Logo from '@/components/Logo';
+import Brand, { useBranding } from '@/components/Branding';
 import { api } from '@/lib/api';
 
 export default function Login() {
@@ -10,6 +10,7 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const { branding } = useBranding();
 
   async function submit() {
     try {
@@ -23,8 +24,8 @@ export default function Login() {
   return (
     <div className="backdrop" style={{ background: 'var(--bg)' }}>
       <div className="gateModal">
-        <Logo size={34} />
-        <div className="gateTitle">Filio</div>
+        <Brand size={34} />
+        <div className="gateTitle">{branding.studioName}</div>
         <div className="gateExplainer">Log in als editor om je projecten te beheren.</div>
         <input
           className="gateInput"

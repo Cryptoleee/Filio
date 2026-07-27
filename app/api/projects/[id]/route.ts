@@ -26,6 +26,13 @@ export async function PATCH(req: Request, { params }: Ctx) {
   if (typeof body.title === 'string' && body.title.trim()) {
     await query('update project set title = $2 where id = $1', [Number(id), body.title.trim()]);
   }
+  if (body.accentHue !== undefined) {
+    const hue = body.accentHue === null ? null : Math.round(Number(body.accentHue));
+    if (hue !== null && (!Number.isFinite(hue) || hue < 0 || hue > 360)) {
+      return NextResponse.json({ error: 'Ongeldige kleur' }, { status: 400 });
+    }
+    await query('update project set accent_hue = $2 where id = $1', [Number(id), hue]);
+  }
   if (body.archived === true) {
     // Archiveren, niet verwijderen: klantfeedback is de enige onvervangbare data.
     await query('update project set archived_at = now() where id = $1', [Number(id)]);
