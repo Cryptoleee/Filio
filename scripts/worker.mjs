@@ -12,6 +12,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { join } from 'node:path';
 import pg from 'pg';
+import { flushNotifications } from './notifier.mjs';
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://postgres@localhost:5432/filio';
 const PROXY_DIR = process.env.PROXY_DIR ?? join(process.cwd(), 'data', 'proxies');
@@ -149,9 +150,14 @@ async function transcode(version) {
       ]
     );
     console.log(`[worker] versie ${id} klaar (${meta.durationMs}ms @ ${meta.fpsNum}/${meta.fpsDen})`);
+    await queueEvent(version.project_id, 'transcode_ready', { versionNumber: version.number });
   } catch (err) {
     console.error(`[worker] versie ${id} mislukt:`, err.message);
     await pool.query("update version set status = 'failed' where id = $1", [id]);
+    await queueEvent(version.project_id, 'transcode_failed', {
+      versionNumber: version.number,
+      body: `${version.orig_filename ?? 'Bestand'}: ${err.message.slice(0, 200)}`,
+    });
   } finally {
     try {
       unlinkSync(srcPath);
@@ -161,7 +167,20 @@ async function transcode(version) {
   }
 }
 
+async function queueEvent(projectId, kind, extra = {}) {
+  try {
+    await pool.query(
+      `insert into notification_event (project_id, kind, version_number, body)
+       values ($1, $2, $3, $4)`,
+      [projectId, kind, extra.versionNumber ?? null, extra.body ?? null]
+    );
+  } catch (err) {
+    console.error('[worker] melding opslaan mislukt:', err.message);
+  }
+}
+
 console.log(`[worker] gestart · PROXY_DIR=${PROXY_DIR} · immich=${IMMICH_URL ? 'ja' : 'mock'}`);
+let lastNotifyCheck = 0;
 for (;;) {
   try {
     const { rows } = await pool.query(
@@ -173,6 +192,13 @@ for (;;) {
     }
   } catch (err) {
     console.error('[worker] poll-fout:', err.message);
+  }
+  // Gebundelde meldingen: elke 15 seconden kijken of er iets verstuurd moet worden
+  if (Date.now() - lastNotifyCheck > 15_000) {
+    lastNotifyCheck = Date.now();
+    await flushNotifications(pool).catch((err) =>
+      console.error('[notify] fout bij bundelen:', err.message)
+    );
   }
   await new Promise((r) => setTimeout(r, 2000));
 }

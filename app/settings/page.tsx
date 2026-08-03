@@ -27,6 +27,214 @@ const SCALES = [
   { v: 1.35, label: 'Extra groot' },
 ];
 
+const QUIET_STEPS = [2, 5, 10, 30];
+
+interface NotifySettings {
+  ntfyUrl: string;
+  ntfyTopic: string;
+  hasToken: boolean;
+  quietMinutes: number;
+  maxWaitMinutes: number;
+  feedback: boolean;
+  transcodeReady: boolean;
+  transcodeFailed: boolean;
+  envOverride: boolean;
+}
+
+function NotificationsCard({
+  onError,
+  onSaved,
+}: {
+  onError: (msg: string | null) => void;
+  onSaved: (msg: string) => void;
+}) {
+  const [cfg, setCfg] = useState<NotifySettings | null>(null);
+  const [url, setUrl] = useState('');
+  const [topic, setTopic] = useState('');
+  const [token, setToken] = useState('');
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    api<NotifySettings>('/api/settings/notifications')
+      .then((d) => {
+        setCfg(d);
+        setUrl(d.ntfyUrl);
+        setTopic(d.ntfyTopic);
+      })
+      .catch(() => {});
+  }, []);
+
+  async function save(body: Record<string, unknown>, msg = 'Opgeslagen') {
+    try {
+      setCfg(
+        await api<NotifySettings>('/api/settings/notifications', {
+          method: 'PATCH',
+          body: JSON.stringify(body),
+        })
+      );
+      onSaved(msg);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Opslaan mislukt');
+    }
+  }
+
+  async function test() {
+    setTesting(true);
+    onError(null);
+    try {
+      await api('/api/settings/notifications/test', { method: 'POST' });
+      onSaved('Testmelding verstuurd');
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Test mislukt');
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  if (!cfg) return null;
+
+  return (
+    <section className="settingsCard">
+      <h2 className="settingsTitle">Notificaties</h2>
+      <p className="settingsHint">
+        Meldingen op je telefoon via de ntfy-app. Ze worden gebundeld: je krijgt één
+        melding per feedbackronde, niet per reactie.
+      </p>
+
+      {cfg.envOverride && (
+        <p className="settingsHint" style={{ color: 'var(--amber)' }}>
+          Server en onderwerp staan vast in je .env — die kun je hier niet wijzigen.
+        </p>
+      )}
+
+      <div className="settingsRow">
+        <div className="settingsLabel">
+          <div className="toggleTitle">ntfy-server</div>
+          <div className="toggleSub">Bijv. https://ntfy.sh of je eigen ntfy op de NAS</div>
+        </div>
+        <input
+          className="settingsInput"
+          placeholder="https://ntfy.sh"
+          value={url}
+          disabled={cfg.envOverride}
+          onChange={(e) => setUrl(e.target.value)}
+          onBlur={() => url !== cfg.ntfyUrl && save({ ntfyUrl: url }, 'Server opgeslagen')}
+        />
+      </div>
+
+      <div className="settingsRow">
+        <div className="settingsLabel">
+          <div className="toggleTitle">Onderwerp (topic)</div>
+          <div className="toggleSub">Kies iets dat niemand raadt, bijv. filio-wolf-9f2k</div>
+        </div>
+        <input
+          className="settingsInput"
+          placeholder="filio-jouwnaam-1234"
+          value={topic}
+          disabled={cfg.envOverride}
+          onChange={(e) => setTopic(e.target.value)}
+          onBlur={() => topic !== cfg.ntfyTopic && save({ ntfyTopic: topic }, 'Onderwerp opgeslagen')}
+        />
+      </div>
+
+      <div className="settingsRow">
+        <div className="settingsLabel">
+          <div className="toggleTitle">Toegangstoken</div>
+          <div className="toggleSub">
+            Alleen nodig bij een beveiligde ntfy-server{cfg.hasToken ? ' · nu ingesteld' : ''}
+          </div>
+        </div>
+        <div className="logoControls">
+          <input
+            className="settingsInput"
+            type="password"
+            placeholder={cfg.hasToken ? '••••••••' : 'tk_… of gebruiker:wachtwoord'}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            onBlur={() => token && save({ ntfyToken: token }, 'Token opgeslagen').then(() => setToken(''))}
+          />
+          {cfg.hasToken && (
+            <button className="chipBtn" onClick={() => void save({ ntfyToken: '' }, 'Token gewist')}>
+              Wissen
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="settingsRow">
+        <div className="settingsLabel">
+          <div className="toggleTitle">Bundelen</div>
+          <div className="toggleSub">
+            Melding als het zo lang stil is · uiterlijk na {cfg.maxWaitMinutes} min
+          </div>
+        </div>
+        <div className="scaleRow">
+          {QUIET_STEPS.map((m) => (
+            <button
+              key={m}
+              className={`sortChip ${cfg.quietMinutes === m ? 'active' : ''}`}
+              onClick={() => void save({ quietMinutes: m }, 'Bundeling opgeslagen')}
+            >
+              {m} min
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="settingsRow">
+        <div className="settingsLabel">
+          <div className="toggleTitle">Nieuwe feedback van klanten</div>
+          <div className="toggleSub">Comments en reacties, gebundeld per project</div>
+        </div>
+        <button
+          className={`switch ${cfg.feedback ? 'on' : ''}`}
+          onClick={() => void save({ feedback: !cfg.feedback })}
+        >
+          <span className="knob" />
+        </button>
+      </div>
+
+      <div className="settingsRow">
+        <div className="settingsLabel">
+          <div className="toggleTitle">Versie klaar om te delen</div>
+          <div className="toggleSub">Als de proxy klaar is met verwerken</div>
+        </div>
+        <button
+          className={`switch ${cfg.transcodeReady ? 'on' : ''}`}
+          onClick={() => void save({ transcodeReady: !cfg.transcodeReady })}
+        >
+          <span className="knob" />
+        </button>
+      </div>
+
+      <div className="settingsRow">
+        <div className="settingsLabel">
+          <div className="toggleTitle">Verwerking mislukt</div>
+          <div className="toggleSub">Zodat je het niet pas ontdekt als de klant belt</div>
+        </div>
+        <button
+          className={`switch ${cfg.transcodeFailed ? 'on' : ''}`}
+          onClick={() => void save({ transcodeFailed: !cfg.transcodeFailed })}
+        >
+          <span className="knob" />
+        </button>
+      </div>
+
+      <div className="settingsRow" style={{ borderBottom: 'none' }}>
+        <div className="settingsLabel">
+          <div className="toggleTitle">Testen</div>
+          <div className="toggleSub">
+            Abonneer je in de ntfy-app op dit onderwerp en stuur een testmelding
+          </div>
+        </div>
+        <button className="chipBtn" disabled={testing} onClick={() => void test()}>
+          {testing ? 'Versturen…' : 'Stuur testmelding'}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const { branding, setBranding } = useBranding();
@@ -205,6 +413,8 @@ export default function SettingsPage() {
                 </div>
               </div>
             </section>
+
+            <NotificationsCard onError={setError} onSaved={flash} />
 
             <section className="settingsCard">
               <h2 className="settingsTitle">Account</h2>

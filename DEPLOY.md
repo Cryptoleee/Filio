@@ -125,6 +125,26 @@ Daarna `docker compose --profile proxy up -d` om het door te voeren, en je kunt
 `immich.nasislike.com` weer van internet afhalen (poortforward of DNS weg).
 Je fotobibliotheek hoeft niet publiek bereikbaar te zijn — de reviewsite wel.
 
+## Stap 8 — Meldingen op je telefoon (ntfy)
+
+Je krijgt **één melding per feedbackronde**, niet per reactie: Filio wacht tot
+het een paar minuten stil is rond een project en stuurt dan een samenvatting.
+
+1. Installeer de **ntfy**-app (iOS/Android) — die heb je waarschijnlijk al voor
+   je NAS.
+2. Bedenk een onderwerp dat niemand raadt, bijv. `filio-wolf-9f2k`. Wie het
+   onderwerp kent, kan de meldingen meelezen — dus kies iets willekeurigs, of
+   gebruik je eigen ntfy-server met een token.
+3. In de app: **+** → onderwerp invullen → abonneren. Gebruik je een eigen
+   ntfy-server, zet die er dan bij (Use another server).
+4. In Filio: **⚙ Instellingen → Notificaties** → server (`https://ntfy.sh` of je
+   eigen adres) en het onderwerp invullen → **Stuur testmelding**. Komt hij
+   binnen op je telefoon? Klaar.
+
+Instelbaar in datzelfde scherm: hoe lang het stil moet zijn voor er een melding
+uitgaat (2–30 min), en waarvoor je gewaarschuwd wordt (nieuwe feedback, versie
+klaar, verwerking mislukt). Tikken op de melding opent meteen het project.
+
 ## Beheer
 
 - **Backup** (alleen de database is onvervangbaar — comments):

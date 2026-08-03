@@ -69,6 +69,8 @@ stap-voor-stap installatie (Docker, `.env`, domein + TLS via Caddy).
    inline te bewerken (besloten regel 2).
 8. ✅ Huisstijl in `/settings`: eigen logo, studionaam en accentkleur (ook per
    project), plus een instelbare interface-grootte voor grote schermen.
+9. ✅ Push-notificaties via ntfy, gebundeld per feedbackronde (wachtrij in
+   `notification_event`, verzending door de worker — zie `scripts/notifier.mjs`).
 
 Database-updates lopen via genummerde migraties in `db/migrations/`; de web-container
 draait `npm run migrate` bij elke start, dus een update vraagt geen handwerk.

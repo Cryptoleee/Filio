@@ -3,7 +3,7 @@ import { actorId, getActor } from '@/lib/server/actor';
 import { canAccessProject, rateLimited } from '@/lib/server/actor';
 import { one } from '@/lib/server/db';
 import { publish } from '@/lib/server/bus';
-import { queueDigest } from '@/lib/server/digest';
+import { queueNotification } from '@/lib/server/notify';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -59,15 +59,17 @@ export async function POST(req: Request, { params }: Ctx) {
   );
 
   publish(versionId, 'comment');
+  // Alleen gastfeedback is nieuws voor de editor; eigen comments niet.
   if (actor.kind === 'guest') {
     const fps = (version.fps_numerator ?? 25) / (version.fps_denominator ?? 1);
-    const s = Math.floor(frameInt / fps);
-    queueDigest({
-      projectTitle: version.project_title,
+    const secs = Math.floor(frameInt / fps);
+    await queueNotification({
+      projectId: Number(version.project_id),
+      kind: parentId ? 'reply' : 'comment',
+      actorName: actor.name,
       versionNumber: version.number,
-      author: actor.name,
+      timecode: `${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`,
       body: text,
-      timecode: `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`,
     });
   }
   return NextResponse.json({ id: Number(row!.id) }, { status: 201 });
